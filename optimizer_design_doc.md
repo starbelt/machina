@@ -1,7 +1,7 @@
 # Flyby Satellite Mission Optimizer — Design Document
 
-**Status:** Draft v0.2
-**Last Updated:** 2026-03-29
+**Status:** Draft v0.2 (Layer 1 implemented)
+**Last Updated:** 2026-03-30
 **Author:** Nathan
 
 ---
@@ -67,7 +67,7 @@ The framework is organized into five layers, ordered from lowest-level (solver) 
 - **Parameter registration:** Creates MX symbolic parameters (fixed values set at solve time, not optimized). Enables re-solving with different problem data without rebuilding the solver.
 - **Constraint collection:** Accepts MX expressions with lower/upper bounds. Accumulates into constraint vector `g` and bound vectors `lbg`/`ubg`. Equality constraints use `lb == ub`.
 - **Cost term collection:** Accepts MX cost expressions and sums them into a single scalar objective `f`.
-- **Build:** Calls `ca.vertcat()` on accumulated variable and constraint lists, assembles the NLP dict `{'x': x, 'f': f, 'g': g, 'p': p}`, and creates the `ca.nlpsol` solver object.
+- **Build:** Calls `ca.vertcat()` on accumulated variable and constraint lists, assembles the NLP dict `{'x': x, 'f': f, 'g': g}` (with `'p'` added only when parameters are registered), and creates the `ca.nlpsol` solver object.
 - **Solve:** Calls the solver with bounds, initial guesses, and parameter values. Returns a `SolutionResult`.
 - **Result extraction:** Uses the stored index map to slice named variables out of `sol['x']`.
 - **Solver configuration:** IPOPT by default, with options overridable (tolerances, max iterations, linear solver, print level, etc.).
@@ -88,19 +88,32 @@ class SolverBackend:
                          passed via dot notation (e.g., 'ipopt.tol': 1e-8)
                          or nested dict (e.g., {'ipopt': {'tol': 1e-8}}).
         """
-        # Internal storage — populated during build phase
-        self._w = []        # List of MX variable symbols
+        # Decision vector accumulators
+        self._w = []        # MX variable symbols
         self._w0 = []       # Initial guess values (flat list)
         self._lbw = []      # Lower bounds on variables (flat list)
         self._ubw = []      # Upper bounds on variables (flat list)
-        self._g = []        # List of MX constraint expressions
+        # Constraint accumulators
+        self._g = []        # MX constraint expressions
         self._lbg = []      # Lower bounds on constraints (flat list)
         self._ubg = []      # Upper bounds on constraints (flat list)
-        self._p = []        # List of MX parameter symbols
-        self._J = 0         # Accumulated cost expression (MX scalar)
+        # Parameter accumulators
+        self._p = []        # MX parameter symbols
+        # Objective
+        self._J = ca.MX.zeros(1, 1)  # Accumulated cost (MX scalar, not Python 0)
+        # Index tracking
         self._offset = 0    # Current position in global decision vector
+        self._p_offset = 0  # Current position in global parameter vector
         self._var_map = {}  # name → (start_index, end_index)
-        self._solver = None # Created at build() time
+        self._param_map = {}# name → (start_index, end_index)
+        # Namespace and metadata
+        self._names = set() # Shared collision namespace (variables + parameters only)
+        self._cost_terms = []        # (name, expr) pairs for reporting
+        self._constraint_names = []  # (name, n_rows) pairs for reporting
+        # Lifecycle flags
+        self._solver = None # ca.nlpsol object, created at build() time
+        self._built = False # True after build() completes
+        self._solved = False# True after the first solve() completes
 
     def add_variable(self, name: str, n: int,
                      lb=-np.inf, ub=np.inf,
@@ -215,20 +228,26 @@ class SolverBackend:
         ...
 ```
 
-**`SolutionResult` (sketch):**
+**`SolutionResult`:**
 
 ```python
 @dataclass
 class SolutionResult:
-    success: bool                  # True if solver converged
-    x_opt: Dict[str, np.ndarray]   # Named variable → optimal value
-    f_opt: float                   # Optimal objective value
-    g_opt: np.ndarray              # Constraint values at optimum
-    lam_x: np.ndarray              # Lagrange multipliers for variable bounds
-    lam_g: np.ndarray              # Lagrange multipliers for constraints
-    stats: dict                    # Solver statistics (iterations, wall time, status)
-    raw_sol: dict                  # Raw CasADi solution dict for advanced use
+    success: bool                        # True if 'Solve_Succeeded' or 'Solved_To_Acceptable_Level'
+    x_opt: Dict[str, np.ndarray]         # Named variable → optimal value (numpy arrays)
+    f_opt: float                         # Optimal objective value
+    g_opt: np.ndarray                    # Constraint values at optimum
+    lam_x: np.ndarray                    # Lagrange multipliers for variable bounds
+    lam_g: np.ndarray                    # Lagrange multipliers for constraints
+    stats: dict                          # Solver statistics (return_status, iter_count, t_wall_total)
+    raw_sol: dict                        # Raw CasADi solution dict for advanced use
+    lam_p: Optional[np.ndarray] = None  # Parameter sensitivities; None if no parameters registered
+
+    def __getitem__(self, name: str) -> np.ndarray:
+        return self.x_opt[name]          # Shorthand: result['x'] → result.x_opt['x']
 ```
+
+All numeric fields are converted from `ca.DM` to numpy via `.full().flatten()` (or `float()` for `f_opt`). Callers never interact with CasADi types after `solve()` returns. `lam_p` is `None` rather than an empty array when no parameters are registered, so callers can test `if result.lam_p is not None` cleanly. Nonzero `lam_p` values also require `{'calc_lam_p': True}` in solver options.
 
 **CasADi implementation notes:**
 - Variables are MX (not SX). The NLP is assembled in MX space, which allows embedding `ca.Function` call nodes from blocks that define reusable computations (e.g., dynamics models).
@@ -237,10 +256,10 @@ class SolutionResult:
 - CasADi auto-generates sparse Jacobians and Hessians from the symbolic graph via source-code-transformation AD. No manual derivative code is needed.
 - For trajectory problems (Phase 5), interleaving state/control variables per timestep produces banded Jacobian structure that sparse linear solvers (MUMPS, MA57) factor efficiently.
 
-**Open questions:**
-- Exact `SolutionResult` fields — the sketch above is a starting point.
-- Whether to support warm-starting in Phase 1 or defer. (Lean: defer, easy to add later by accepting `lam_x0`/`lam_g0` in `solve()`.)
-- Whether to include an iteration callback mechanism in Phase 1 or defer. (Lean: defer, add when needed for convergence debugging.)
+**Resolved design decisions:**
+- **`SolutionResult` fields:** Finalized — see dataclass above. Added `lam_p` for parameter sensitivities and `__getitem__` for named access. Full specification in `machina/solver/solver_backend_interface_v2.md`.
+- **Warm-starting:** Deferred. `SolutionResult` already stores `lam_x` and `lam_g`, so the round-trip data is available. Will be added as optional `lam_x0`/`lam_g0` arguments to `solve()` when needed.
+- **Iteration callback:** Deferred. Will be added via the `iteration_callback` solver option (a `ca.Callback` subclass) when convergence debugging is needed on the real flyby problem. Incompatible with `expand=True`.
 
 ---
 
