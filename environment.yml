@@ -1,7 +1,0 @@
-name: machina-v2
-channels:
-  - conda-forge
-  - defaults
-dependencies:
- - pip:
-    - casadi
