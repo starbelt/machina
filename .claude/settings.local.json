@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_blocks_phase1.py -v --tb=short)",
+      "Read(//c/Users/natha/AppData/Local/Programs/**)",
+      "Read(//c/Users/natha/miniconda3/**)",
+      "Read(//c/Users/natha/**)",
+      "Bash(python3 -m pytest tests/test_viz.py -v)",
+      "Bash(py -m pytest tests/test_viz.py -v)",
+      "Bash(ls /c/Users/natha/AppData/Local/Python*)",
+      "Bash(find /c/Users/natha/AppData/Local -name python*.exe)"
+    ]
+  }
+}

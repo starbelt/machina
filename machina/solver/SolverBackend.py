@@ -88,10 +88,11 @@ class SolverBackend:
         self._offset:   int = 0
         self._p_offset: int = 0
 
-        # Index maps for result extraction. Maps name → (start, end) in the
-        # flat vector, so sol['x'][start:end] retrieves that variable's values.
-        self._var_map:   dict[str, tuple[int, int]] = {}
-        self._param_map: dict[str, tuple[int, int]] = {}
+        # Index maps for result extraction. Maps name → (start, end, shape) in
+        # the flat vector. shape is (n, 1) for vectors, (rows, cols) for
+        # matrices. Used to reshape extracted slices back to their original form.
+        self._var_map:   dict[str, tuple[int, int, tuple[int, int]]] = {}
+        self._param_map: dict[str, tuple[int, int, tuple[int, int]]] = {}
 
         # Shared namespace for collision detection across variables AND
         # parameters. Constraints and cost terms intentionally do not go here —
@@ -111,7 +112,7 @@ class SolverBackend:
     # Registration
     # -------------------------------------------------------------------------
 
-    def add_variable(self, name: str, n: int,
+    def add_variable(self, name: str, n: int | tuple[int, int],
                      lb=-np.inf, ub=np.inf,
                      initial_guess=0.0) -> ca.MX:
         """
@@ -119,17 +120,25 @@ class SolverBackend:
 
         The returned MX symbol is the handle used to build constraint and cost
         expressions. Internally, the variable occupies a contiguous slice
-        [offset, offset+n) in the flat vector; this slice is recorded in
+        [offset, offset+numel) in the flat vector; this slice is recorded in
         ``_var_map`` so results can be extracted by name after solving.
+
+        For matrix variables, the decision vector stores elements column-major
+        (via ``ca.vec``). Extraction automatically reshapes the result back to
+        ``(rows, cols)`` using Fortran order, matching CasADi's column-major
+        convention.
 
         Args:
             name:          Unique name for this variable. Must not already exist
                            in the variable/parameter namespace.
-            n:             Number of elements. Creates an n×1 column vector.
-                           For matrix-valued variables, register multiple
-                           flat vectors and reshape after extraction.
-            lb:            Lower bound. Scalar is broadcast to all n elements.
-                           Can also be a list or array of length n.
+            n:             Size of the variable. Pass an ``int`` for an n×1
+                           column vector, or a ``(rows, cols)`` tuple for a
+                           matrix. The returned MX symbol has the requested
+                           shape; bounds and initial guess are broadcast to
+                           ``rows * cols`` elements.
+            lb:            Lower bound. Scalar is broadcast to all elements.
+                           Can also be a list or array of length ``rows*cols``
+                           (column-major order for matrices).
             ub:            Upper bound. Same broadcast rules as lb.
             initial_guess: Starting point for the solver. Scalar or array.
                            A good initial guess is important for convergence on
@@ -137,8 +146,9 @@ class SolverBackend:
                            is known.
 
         Returns:
-            MX symbolic variable — use this to form objective and constraint
-            expressions passed to ``add_cost`` and ``add_constraint``.
+            MX symbolic variable with the requested shape — use this to form
+            objective and constraint expressions passed to ``add_cost`` and
+            ``add_constraint``.
 
         Raises:
             ValueError: If ``name`` already exists in the variable/parameter
@@ -148,26 +158,35 @@ class SolverBackend:
             raise ValueError(f"Variable name '{name}' already exists.")
         self._names.add(name)
 
-        var = ca.MX.sym(name, n)
+        if isinstance(n, tuple):
+            rows, cols = n
+            numel = rows * cols
+            var = ca.MX.sym(name, rows, cols)
+            # ca.vec flattens column-major so the matrix occupies a contiguous
+            # column vector block in the global decision vector, as nlpsol requires.
+            self._w.append(ca.vec(var))
+        else:
+            rows, cols = n, 1
+            numel = n
+            var = ca.MX.sym(name, n)
+            self._w.append(var)
 
-        # Scalars are broadcast; arrays are accepted as-is. Both paths produce
-        # a flat Python list of length n, which is what CasADi expects for the
-        # lbx/ubx/x0 arguments at solve time.
-        lb = np.full(n, lb).tolist() if np.isscalar(lb) else list(lb)
-        ub = np.full(n, ub).tolist() if np.isscalar(ub) else list(ub)
-        initial_guess = np.full(n, initial_guess).tolist() if np.isscalar(initial_guess) else list(initial_guess)
+        # Scalars are broadcast; arrays are flattened to handle matrix-shaped
+        # inputs consistently. Both paths produce a flat list of length numel.
+        lb = np.full(numel, lb).tolist() if np.isscalar(lb) else list(np.asarray(lb).flatten())
+        ub = np.full(numel, ub).tolist() if np.isscalar(ub) else list(np.asarray(ub).flatten())
+        initial_guess = np.full(numel, initial_guess).tolist() if np.isscalar(initial_guess) else list(np.asarray(initial_guess).flatten())
 
-        self._w.append(var)
         self._w0.extend(initial_guess)
         self._lbw.extend(lb)
         self._ubw.extend(ub)
 
-        self._var_map[name] = (self._offset, self._offset + n)
-        self._offset += n
+        self._var_map[name] = (self._offset, self._offset + numel, (rows, cols))
+        self._offset += numel
 
         return var
 
-    def add_parameter(self, name: str, n: int) -> ca.MX:
+    def add_parameter(self, name: str, n: int | tuple[int, int]) -> ca.MX:
         """
         Create a fixed parameter and register it in the global parameter vector.
 
@@ -181,7 +200,11 @@ class SolverBackend:
             name: Unique name. Must not already exist in the variable/parameter
                   namespace (parameters and variables share one namespace to
                   prevent ambiguous expression graphs).
-            n:    Number of elements.
+            n:    Size of the parameter. Pass an ``int`` for an n×1 column
+                  vector, or a ``(rows, cols)`` tuple for a matrix. The
+                  returned MX symbol has the requested shape; the corresponding
+                  ``p_val`` slice must supply ``rows*cols`` values in
+                  column-major order.
 
         Returns:
             MX symbolic parameter — use this in objective and constraint
@@ -195,10 +218,19 @@ class SolverBackend:
             raise ValueError(f"Parameter name '{name}' already exists.")
         self._names.add(name)
 
-        param = ca.MX.sym(name, n)
-        self._p.append(param)
-        self._param_map[name] = (self._p_offset, self._p_offset + n)
-        self._p_offset += n
+        if isinstance(n, tuple):
+            rows, cols = n
+            numel = rows * cols
+            param = ca.MX.sym(name, rows, cols)
+            self._p.append(ca.vec(param))
+        else:
+            rows, cols = n, 1
+            numel = n
+            param = ca.MX.sym(name, n)
+            self._p.append(param)
+
+        self._param_map[name] = (self._p_offset, self._p_offset + numel, (rows, cols))
+        self._p_offset += numel
 
         return param
 
@@ -415,11 +447,13 @@ class SolverBackend:
         success = return_status in ('Solve_Succeeded', 'Solved_To_Acceptable_Level')
 
         # Slice each named variable out of the flat solution vector using the
-        # index ranges recorded at registration time.
-        x_opt = {
-            name: sol['x'][i:j].full().flatten()
-            for name, (i, j) in self._var_map.items()
-        }
+        # index ranges recorded at registration time. Matrix variables are
+        # reshaped back to (rows, cols) using Fortran (column-major) order,
+        # matching the ca.vec() column-major flattening used at registration.
+        x_opt = {}
+        for name, (i, j, shape) in self._var_map.items():
+            vals = sol['x'][i:j].full().flatten()
+            x_opt[name] = vals.reshape(shape, order='F') if shape[1] > 1 else vals
 
         # Convert all CasADi DM outputs to numpy. lam_p (parameter sensitivity)
         # is only meaningful when parameters are registered; set to None otherwise
@@ -462,8 +496,9 @@ class SolverBackend:
         Returns:
             1-D numpy array of optimal values for this variable.
         """
-        i, j = self._var_map[name]
-        return sol['x'][i:j].full().flatten()
+        i, j, shape = self._var_map[name]
+        vals = sol['x'][i:j].full().flatten()
+        return vals.reshape(shape, order='F') if shape[1] > 1 else vals
 
     def stats(self) -> dict:
         """

@@ -75,7 +75,7 @@ class TestRegistration:
     def test_add_variable_offset_tracking_single(self):
         b = make_backend()
         b.add_variable("x", 4)
-        assert b._var_map["x"] == (0, 4)
+        assert b._var_map["x"] == (0, 4, (4, 1))
         assert b._offset == 4
 
     def test_add_variable_offset_tracking_multiple(self):
@@ -84,9 +84,9 @@ class TestRegistration:
         b.add_variable("a", 2)
         b.add_variable("b", 3)
         b.add_variable("c", 1)
-        assert b._var_map["a"] == (0, 2)
-        assert b._var_map["b"] == (2, 5)
-        assert b._var_map["c"] == (5, 6)
+        assert b._var_map["a"] == (0, 2, (2, 1))
+        assert b._var_map["b"] == (2, 5, (3, 1))
+        assert b._var_map["c"] == (5, 6, (1, 1))
         assert b._offset == 6
 
     def test_add_variable_added_to_names_set(self):
@@ -119,8 +119,8 @@ class TestRegistration:
         b = make_backend()
         b.add_parameter("p1", 2)
         b.add_parameter("p2", 3)
-        assert b._param_map["p1"] == (0, 2)
-        assert b._param_map["p2"] == (2, 5)
+        assert b._param_map["p1"] == (0, 2, (2, 1))
+        assert b._param_map["p2"] == (2, 5, (3, 1))
         assert b._p_offset == 5
 
     # --- add_constraint -----------------------------------------------------

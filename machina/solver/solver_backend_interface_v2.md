@@ -1,7 +1,7 @@
 # Layer 1 — SolverBackend Interface Specification
 
 **Status:** Implemented
-**Last Updated:** 2026-03-30
+**Last Updated:** 2026-04-03
 
 ---
 
@@ -22,8 +22,8 @@
 | `_J` | `ca.MX` | Accumulated cost expression (scalar, starts at `ca.MX.zeros(1,1)`) |
 | `_offset` | `int` | Current position in global decision vector |
 | `_p_offset` | `int` | Current position in global parameter vector |
-| `_var_map` | `dict[str, tuple[int, int]]` | Variable name → `(start_index, end_index)` |
-| `_param_map` | `dict[str, tuple[int, int]]` | Parameter name → `(start_index, end_index)` |
+| `_var_map` | `dict[str, tuple[int, int, tuple[int, int]]]` | Variable name → `(start_index, end_index, (rows, cols))` |
+| `_param_map` | `dict[str, tuple[int, int, tuple[int, int]]]` | Parameter name → `(start_index, end_index, (rows, cols))` |
 | `_names` | `set[str]` | Shared namespace for collision detection — **variables and parameters only**. Constraint and cost term names are NOT stored here. |
 | `_cost_terms` | `list[tuple[str, ca.MX]]` | `(name, expr)` pairs for objective breakdown reporting |
 | `_constraint_names` | `list[tuple[str, int]]` | `(name, n_rows)` pairs, parallel to `_g`, for reporting |
@@ -52,20 +52,21 @@ Create a decision variable and register it in the global decision vector.
 
 **Args:**
 - `name`: Unique name. Must not already exist in `_names`.
-- `n`: Number of elements. Creates an `n × 1` column vector. For matrix-valued variables, register as a flat vector and reshape after result extraction.
-- `lb`: Lower bound. Scalar broadcasts to length `n`. Can also be a list/array of length `n`.
+- `n`: Size of the variable. Pass an `int` for an `n × 1` column vector, or a `(rows, cols)` tuple for a matrix. The returned MX symbol has the requested shape; bounds and initial guess broadcast to `rows * cols` elements.
+- `lb`: Lower bound. Scalar broadcasts to all elements. Can also be a list/array of length `numel` (column-major order for matrices).
 - `ub`: Upper bound. Same broadcast rules as `lb`.
 - `initial_guess`: Starting value for solver. Same broadcast rules.
 
-**Returns:** MX symbolic variable.
+**Returns:** MX symbolic variable with the requested shape.
 
 **Behavior:**
 - Raises `ValueError` if `name` already exists in `_names`.
-- Creates `ca.MX.sym(name, n)`.
-- Broadcasts `lb`, `ub`, `initial_guess` to flat lists of length `n`.
-- Appends symbol to `_w`, values to `_w0`, `_lbw`, `_ubw`.
-- Records `_var_map[name] = (offset, offset + n)`.
-- Adds `name` to `_names`, advances `_offset` by `n`.
+- For `n: int`: creates `ca.MX.sym(name, n)` and appends directly to `_w`.
+- For `n: (rows, cols)`: creates `ca.MX.sym(name, rows, cols)` and appends `ca.vec(var)` to `_w`. `ca.vec` flattens column-major so the matrix occupies a contiguous column-vector block in the global decision vector, as `nlpsol` requires. The full matrix symbol is returned to the caller for use in expressions.
+- Broadcasts `lb`, `ub`, `initial_guess` to flat lists of length `numel = rows * cols`.
+- Array-valued bounds/guesses are also flattened (`np.asarray(...).flatten()`) to handle matrix-shaped inputs.
+- Records `_var_map[name] = (offset, offset + numel, (rows, cols))`. For vector variables, `cols = 1`.
+- Adds `name` to `_names`, advances `_offset` by `numel`.
 
 ---
 
@@ -75,16 +76,16 @@ Create a fixed parameter (not optimized, value set at solve time).
 
 **Args:**
 - `name`: Unique name. Must not already exist in `_names`.
-- `n`: Number of elements.
+- `n`: Size of the parameter. Pass an `int` for an `n × 1` column vector, or a `(rows, cols)` tuple for a matrix. The returned MX symbol has the requested shape.
 
-**Returns:** MX symbolic parameter.
+**Returns:** MX symbolic parameter with the requested shape.
 
 **Behavior:**
 - Raises `ValueError` if `name` already exists in `_names`.
-- Creates `ca.MX.sym(name, n)`.
-- Records `_param_map[name] = (p_offset, p_offset + n)`.
-- Appends symbol to `_p`.
-- Adds `name` to `_names`, advances `_p_offset` by `n`.
+- For `n: int`: creates `ca.MX.sym(name, n)` and appends directly to `_p`.
+- For `n: (rows, cols)`: creates `ca.MX.sym(name, rows, cols)` and appends `ca.vec(param)` to `_p`. Same column-major flattening rationale as `add_variable`.
+- Records `_param_map[name] = (p_offset, p_offset + numel, (rows, cols))`. For vector parameters, `cols = 1`.
+- Adds `name` to `_names`, advances `_p_offset` by `numel`.
 
 ---
 
@@ -186,10 +187,10 @@ Call the solver and return results.
 - Raises `RuntimeError` if `_built` is `False`.
 - If parameters registered: raises `ValueError` if `p_val` is `None` or the wrong length. The length check is done before the solver call to surface a clear error rather than a CasADi dimension mismatch.
 - If no parameters registered: `p_val=None` is valid; `p` keyword is omitted from the solver call.
-- `p_val` is normalized via `np.asarray(p_val).flatten()` before being passed to the solver. This ensures CasADi receives a consistent 1-D input regardless of whether the caller supplied a flat list, a 2-D array, or a column vector. The normalized array (`p_arr`) is what is actually passed; the original `p_val` is discarded after validation.
+- `p_val` is normalized via `np.asarray(p_val).flatten()` before being passed to the solver. This ensures CasADi receives a consistent 1-D input regardless of whether the caller supplied a flat list, a 2-D array, or a column vector. The normalized array (`p_arr`) is what is actually passed; the original `p_val` is discarded after validation. For matrix parameters, values must be supplied in column-major order to match the `ca.vec` layout used at registration.
 - Calls solver with `x0=_w0`, `lbx=_lbw`, `ubx=_ubw`, `lbg=_lbg`, `ubg=_ubg`, and `p=p_arr` (if parameters exist).
 - Sets `_solved = True` after the solver call returns (regardless of convergence status).
-- Extracts named variable values by slicing `sol['x']` via `_var_map`, converting each slice with `.full().flatten()` to produce numpy arrays.
+- Extracts named variable values by slicing `sol['x']` via `_var_map`, converting each slice with `.full().flatten()`. Matrix variables (`cols > 1`) are subsequently reshaped to `(rows, cols)` using `np.reshape(..., order='F')` (Fortran/column-major order), reversing the `ca.vec` flattening applied at registration. Vector variables are returned as 1-D arrays.
 - Determines `success` from IPOPT `return_status`: `True` if `'Solve_Succeeded'` or `'Solved_To_Acceptable_Level'`, `False` otherwise.
 - Converts `f_opt` with `float(sol['f'])`.
 - Converts `g_opt`, `lam_x`, `lam_g` with `.full().flatten()`.
@@ -210,7 +211,7 @@ Lower-level alternative to `result.x_opt[name]`. Works directly on the CasADi so
 - `sol`: Dict containing the `'x'` key (raw CasADi solution or `result.raw_sol`).
 - `name`: Variable name as registered with `add_variable`.
 
-**Returns:** 1-D numpy array.
+**Returns:** 1-D numpy array for vector variables; `(rows, cols)` numpy array for matrix variables (same reshape logic as `solve()`).
 
 ---
 
@@ -249,6 +250,8 @@ class SolutionResult:
 **`success` definition:** `True` when IPOPT `return_status` is `'Solve_Succeeded'` or `'Solved_To_Acceptable_Level'`. `False` for all other statuses (infeasible, max iterations exceeded, etc.).
 
 **`lam_p` note:** Nonzero values require `{'calc_lam_p': True}` in solver options. Set to `None` (not an empty array) when no parameters were registered, so callers can test `if result.lam_p is not None` without special-casing an empty array.
+
+**`x_opt` shapes:** Vector variables (registered with `int` n) produce 1-D arrays of length `n`. Matrix variables (registered with a `(rows, cols)` tuple) produce `(rows, cols)` 2-D arrays, reshaped from the flat decision vector using column-major order (`order='F'`) to reverse the `ca.vec` flattening applied at registration.
 
 **DM → numpy conversions:** All numeric fields extracted from the CasADi solution dict are converted from `ca.DM` to numpy arrays via `.full().flatten()`, or to `float()` for scalars. Callers never interact with CasADi types after `solve()` returns.
 
