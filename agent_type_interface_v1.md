@@ -1,7 +1,7 @@
 # Layer 3 — Agent Types Interface Specification
 
-**Status:** v1.2 (Phases 3a–3b complete)
-**Last Updated:** 2026-04-08
+**Status:** v1.3 (Phases 3a–3c complete)
+**Last Updated:** 2026-04-09
 **Author:** Nathan
 **Parent Document:** `CLAUDE.md` (v0.7)
 
@@ -711,66 +711,94 @@ C_total = (T_orbit / N) · Σᵢ cᵢ
 
 T_orbit is itself a function of the orbital elements: T = 2π·√(a³/μ), where a = p/(1 - f² - g²).
 
-### A.7 Agent Type: SingleSatCoverage
+### A.7 Agent Type: SingleSatCoverage ✓ IMPLEMENTED
 
-A minimal agent type for this problem. Not intended for the flyby mission — it exists to validate the framework machinery.
+Optimizes MEE orbital elements to maximize time-average coverage over a fixed ground target. Uses static orbital geometry (MEE→ECI at N sampled true longitudes — no propagation). Implemented in `machina/agents/single_sat_coverage.py`.
 
-**Config structure:**
+**Config structure (all fields have defaults):**
 ```python
 config = {
-    'geometry': 'keplerian',       # only option for this agent
-    'n_sample_points': 72,         # orbit discretization (every 5° in L)
+    'n_sample_points': 72,           # orbit discretization (true longitude samples)
     'ground_target': {
-        'lat': 38.9,               # degrees
-        'lon': -77.0               # degrees
+        'lat_deg': 38.9,             # geodetic latitude [deg]
+        'lon_deg': -77.0,            # geodetic longitude [deg]
     },
     'coverage': {
-        'min_elevation': 10.0,     # degrees
-        'sigmoid_k': 20.0          # steepness
+        'min_elevation_deg': 10.0,   # elevation mask [deg]
+        'sigmoid_k': 20.0,           # sigmoid steepness [1/rad]
     },
     'altitude_bounds': {
-        'perigee_min': 200.0,      # km
-        'apogee_max': 40000.0      # km
+        'perigee_min_km': 200.0,     # minimum perigee altitude [km]
+        'apogee_max_km': 40000.0,    # maximum apogee altitude [km]
     },
     'constants': {
-        'mu': 398600.4418,         # km³/s²
-        'R_earth': 6378.137        # km
+        'mu': 398600.4418,           # km³/s²
+        'R_earth': 6378.137,         # km
     }
 }
 ```
 
-**Declared quantities:**
+**Declared quantities (9 total):**
 
 | Path | Shape | Role | Default Role | Default Value | Description |
 |------|-------|------|-------------|---------------|-------------|
-| `orbital/p` | (1,1) | flexible | variable | 7000.0 | Semi-latus rectum [km] |
-| `orbital/f` | (1,1) | flexible | variable | 0.0 | Eccentricity vector x |
-| `orbital/g` | (1,1) | flexible | variable | 0.0 | Eccentricity vector y |
-| `orbital/h` | (1,1) | flexible | variable | 0.0 | Node vector x |
-| `orbital/k` | (1,1) | flexible | variable | 0.0 | Node vector y |
-| `sample_points/L` | (N,1) | always_parameter | — | linspace(0, 2π, N) | True longitude samples |
-| `target/position` | (3,1) | always_parameter | — | from lat/lon | Ground target ECI |
-| `constants/mu` | (1,1) | always_parameter | — | 398600.4418 | Gravitational parameter |
-| `constants/R_earth` | (1,1) | always_parameter | — | 6378.137 | Earth radius |
-| `coverage/min_elevation` | (1,1) | always_parameter | — | 10.0 | Min elevation [deg] |
-| `coverage/sigmoid_k` | (1,1) | always_parameter | — | 20.0 | Sigmoid steepness |
+| `orbital/p` | (1,1) | flexible | variable | R_earth+500 km | Semi-latus rectum [km]; lb=100, ub=R_earth+apogee_max |
+| `orbital/f` | (1,1) | flexible | variable | 0.01 | Eccentricity vector x; lb=-1, ub=1 |
+| `orbital/g` | (1,1) | flexible | variable | 0.0 | Eccentricity vector y; lb=-1, ub=1 |
+| `orbital/h` | (1,1) | flexible | variable | tan(51.6°/2)≈0.483 | Node vector x; lb=-1.5, ub=1.5 |
+| `orbital/k` | (1,1) | flexible | variable | 0.0 | Node vector y; lb=-1.5, ub=1.5 |
+| `sample_points/L` | (N,1) | always_parameter | — | linspace(0, 2π, N+1)[:-1] | True longitude samples [rad] |
+| `target/position` | (3,1) | always_parameter | — | from lat/lon (computed in declare) | Ground target ECI [km] |
+| `coverage/min_elevation` | (1,1) | always_parameter | — | min_elevation_deg→rad | Min elevation [rad] |
+| `coverage/sigmoid_k` | (1,1) | always_parameter | — | sigmoid_k [1/rad] | Sigmoid steepness |
 
-**Namespace (after build):**
+Note: `constants/mu` and `constants/R_earth` are NOT declared as quantities — they are read from config and stored as Python floats used directly in factory calls. `sample_points/L` is declared but not exposed in the namespace (internal to build).
+
+**Namespace (after build, 5+4+3+1+N entries):**
 
 ```
-orbital/p, orbital/f, orbital/g, orbital/h, orbital/k
-orbital/sma              (computed: p / (1 - f² - g²))
-orbital/ecc              (computed: √(f² + g²))
-orbital/inc              (computed: 2·arctan(√(h² + k²)))
-coverage/total           (computed: the objective quantity)
-coverage/per_point/{i}   (computed: per-sample-point coverage value)
-constraints/perigee_alt  (exposed for debugging)
-constraints/apogee_alt   (exposed for debugging)
+orbital/p, orbital/f, orbital/g, orbital/h, orbital/k  (5 raw variables)
+orbital/sma      p / (1 - f² - g²)                      (derived)
+orbital/ecc      √(fmax(f² + g², TINY))                  (derived, guarded)
+orbital/inc      2·arctan(√(fmax(h² + k², TINY)))        (derived, guarded)
+orbital/period   2π·√(sma³/μ)                            (derived)
+target/position  (3,1) ECI vector                        (parameter)
+coverage/min_elevation  (1,1) scalar                     (parameter)
+coverage/sigmoid_k      (1,1) scalar                     (parameter)
+coverage/total          Σcᵢ/N, in [0,1]                  (computed objective)
+coverage/per_point/{0..N-1}  per-sample coverage values  (computed)
 ```
 
-**Constraints returned from build():**
-- `perigee_altitude`: p/(1 + √(f² + g²)) - R_earth ≥ h_min
-- `apogee_altitude`: p/(1 - √(f² + g²)) - R_earth ≤ h_max
+**Constraints returned from build() (squared formulation):**
+- `perigee_altitude`: `(p - R_min)² - R_min²·(f²+g²) ≥ 0`  where R_min = R_earth + perigee_min_km
+- `apogee_altitude`:  `(R_max - p)² - R_max²·(f²+g²) ≥ 0`  where R_max = R_earth + apogee_max_km
+
+Both constraints use lb=0, ub=inf. The squared form avoids `sqrt(f²+g²)` in constraint expressions (zero Jacobian at circular orbit would cause LICQ failure).
+
+**Usage:**
+```python
+from machina.agents import SingleSatCoverage
+from machina.compiler.compiler_stub import CompilerStub
+
+agent    = SingleSatCoverage('sat', config)
+compiler = CompilerStub(solver_opts={
+    'ipopt.print_level': 0,
+    'ipopt.acceptable_tol': 1e-2,
+    'ipopt.acceptable_iter': 3,
+})
+compiler.add_agent(agent)
+compiler.compile(overrides={
+    'sat/orbital/p': {'value': 6878.0, 'lb': 6578.0, 'ub': 7978.0},
+    'sat/orbital/f': {'value': 0.01,   'lb': -0.3,   'ub': 0.3},
+    'sat/orbital/g': {'value': 0.0,    'lb': -0.3,   'ub': 0.3},
+    'sat/orbital/h': {'value': 0.48,   'lb': -1.5,   'ub': 1.5},
+    'sat/orbital/k': {'value': 0.0,    'lb': -1.5,   'ub': 1.5},
+})
+cov_sd = compiler.resolve('sat', 'coverage/total')
+compiler.add_cost(-cov_sd.symbol, name='neg_coverage')
+compiler.build_solver()
+result = compiler.solve()
+```
 
 ### A.8 Development Phases
 
@@ -806,13 +834,74 @@ constraints/apogee_alt   (exposed for debugging)
 
 **Note on ordering:** Phase 3b does not block Phase 3c. Recommended sequence: 3c → 3d (or 3b already done, proceed to 3c).
 
-#### Phase 3c — Coverage Geometry and Agent
+#### Phase 3c — Coverage Geometry and Agent ✓ COMPLETE
 
-1. Implement `geometry.ground_target_eci` and `geometry.elevation_angle` factories — `machina/blocks/library/geometry.py`.
-2. Implement `cost.smooth_coverage` factory.
-3. Implement `SingleSatCoverage` agent type — `machina/agents/single_sat_coverage.py`.
-4. Solve coverage optimization: verify that optimizer finds expected orbit (high inclination for high-latitude target, etc.).
-5. Validate against STK or analytical expectations.
+**Files:**
+- `machina/blocks/library/geometry.py` — 2 new factory functions (`geometry.ground_target_eci`, `geometry.elevation_angle`)
+- `machina/blocks/library/cost.py` — 1 new factory (`cost.smooth_coverage`)
+- `machina/agents/single_sat_coverage.py` — `SingleSatCoverage` agent (9 declared quantities, 2 constraints)
+- `tests/test_blocks_phase3c.py` — 35 tests (geometry + smooth_coverage)
+- `tests/test_agents_phase3c.py` — 36 tests (declare/build/resolve/end-to-end)
+- `examples/coverage_optimization.py` — three demos: elevation profile, optimization, inclination sweep
+
+**Implementation notes:**
+1. `geometry.ground_target_eci(R_earth=...)` — factory parameter follows `mee_to_eci(mu=...)` pattern; lat/lon inputs in radians.
+2. `geometry.elevation_angle()` — no factory params; `epsilon = arcsin(rho_hat · n_hat)`; TINY=1e-32 guard on norms.
+3. `cost.smooth_coverage()` — all three inputs (elevation, min_elevation, k) are function arguments (not factory params) so MX parameter symbols can flow through.
+4. **Circular orbit singularity:** `sqrt(f²+g²)` has zero Jacobian at e=0. Mitigated by `ca.fmax(f²+g², TINY)` guard in derived quantities and f=0.01 default initial guess.
+5. **Squared altitude constraints:** `(p-R_min)² - R_min²*(f²+g²) >= 0` — avoids sqrt in constraint expressions, which also had zero Jacobian at e=0 (would cause LICQ failure).
+6. **h,k bounds [-1.5, 1.5]:** Covers 0–123° inclination. Wider bounds allow near-retrograde orbits where IPOPT's Hessian produces NaN.
+7. **IPOPT convergence:** `acceptable_tol=1e-2, acceptable_iter=3` prevents running into the degenerate Jacobian region near the optimal circular orbit solution.
+8. **Snapshot ECI geometry:** Target is fixed in ECI (no Earth rotation modelled). RAAN significantly affects visibility; RAAN≈240° gives ~65° max elevation over Washington DC for i=51.6°, 500 km.
+
+#### MEE Agent Implementation Patterns
+
+The following patterns apply to **any agent that uses MEE orbital elements (p, f, g, h, k) as decision variables**. They are not optional style choices — they are required for gradient-based NLP solvers to work correctly near circular orbits.
+
+**1. Altitude constraints must use the squared form**
+
+`sqrt(f²+g²)` has zero gradient at f=g=0 (circular orbit). In constraint expressions this causes a degenerate constraint Jacobian — LICQ fails, and IPOPT will declare infeasibility or produce incorrect multipliers. Use the algebraically equivalent squared form:
+
+```python
+# CORRECT — smooth at e=0
+R_min = R_earth + perigee_min_km
+R_max = R_earth + apogee_max_km
+e2    = f**2 + g**2
+perigee_expr = (p - R_min)**2 - R_min**2 * e2   # >= 0
+apogee_expr  = (R_max - p)**2 - R_max**2 * e2   # >= 0
+
+# WRONG — degenerate Jacobian at e=0
+e = ca.sqrt(f**2 + g**2)
+perigee_expr = p / (1 + e) - R_min   # >= 0   <-- DO NOT USE
+apogee_expr  = R_max - p / (1 - e)   # >= 0   <-- DO NOT USE
+```
+
+This is design decision #32 in CLAUDE.md.
+
+**2. Derived eccentricity quantities are display-only**
+
+The namespace entries `orbital/ecc`, `orbital/sma`, `orbital/period` contain `sqrt(f²+g²)` with a `ca.fmax(..., TINY)` guard to prevent NaN at e=0. They are safe to read from `result.x_opt` after solving. **Do not wire them into NLP objectives or constraints** — doing so pulls the singular gradient back into the NLP Jacobian. Cross-agent coupling must stay in f/g space (raw MEE components), not derived eccentricity. This is design decision #33.
+
+**3. Use a non-zero initial guess for f**
+
+Starting at f=0, g=0 exactly causes the first Jacobian evaluation to fail. Use `f=0.01` (or similar small non-zero value) as the default initial guess for the eccentricity vector components. This also applies to override values passed in through the compiler.
+
+**4. IPOPT solver options for MEE problems**
+
+Near the optimal solution (often nearly circular), the squared constraint Jacobian becomes degenerate in the f,g directions. Use these options to prevent IPOPT from running into the degenerate region:
+
+```python
+solver_opts = {
+    'ipopt.acceptable_tol':  1e-2,   # accept a solution this close to KKT optimality
+    'ipopt.acceptable_iter': 3,      # stop after 3 consecutive acceptable iterations
+}
+```
+
+With strict tolerance (`tol=1e-8` default), IPOPT tries to compute multipliers at the degenerate point and returns `Invalid_Number_Detected`. With `acceptable_tol`, it stops before reaching that point. The solution is slightly suboptimal but numerically valid — appropriate for orbital design problems.
+
+**5. h, k bounds**
+
+Bound `h` and `k` to `[-1.5, 1.5]`. This covers inclinations 0–123° (sufficient for all LEO and most MEO applications). Wider bounds (e.g., ±3) allow near-retrograde inclinations where the MEE Hessian becomes ill-conditioned for larger NLPs.
 
 #### Phase 3d — FlybySatellite Agent
 

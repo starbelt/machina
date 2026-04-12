@@ -9,5 +9,7 @@ ConstraintDeclaration -- dataclass describing a constraint an agent returns
 """
 
 from .agent_type import AgentType, QuantityDeclaration, ConstraintDeclaration
+from .single_sat_coverage import SingleSatCoverage
 
-__all__ = ['AgentType', 'QuantityDeclaration', 'ConstraintDeclaration']
+__all__ = ['AgentType', 'QuantityDeclaration', 'ConstraintDeclaration',
+           'SingleSatCoverage']

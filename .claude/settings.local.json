@@ -8,7 +8,9 @@
       "Bash(python3 -m pytest tests/test_viz.py -v)",
       "Bash(py -m pytest tests/test_viz.py -v)",
       "Bash(ls /c/Users/natha/AppData/Local/Python*)",
-      "Bash(find /c/Users/natha/AppData/Local -name python*.exe)"
+      "Bash(find /c/Users/natha/AppData/Local -name python*.exe)",
+      "Bash(/c/Users/natha/.conda/envs/machina/python.exe -m pytest tests/test_blocks_phase3c.py tests/test_agents_phase3c.py --tb=short -q)",
+      "Bash(/c/Users/natha/.conda/envs/machina/python.exe -m pytest tests/test_agents_phase3c.py::TestSingleSatCoverageEndToEnd --tb=short -q)"
     ]
   }
 }

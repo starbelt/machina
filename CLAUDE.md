@@ -1,7 +1,7 @@
 # Flyby Satellite Mission Optimizer — Design Document
 
-**Status:** Draft v0.7 (Layers 1–2 complete, Layer 3 in progress — Phases 3a–3b done)
-**Last Updated:** 2026-04-08
+**Status:** Draft v0.8 (Layers 1–2 complete, Layer 3 in progress — Phases 3a–3c done)
+**Last Updated:** 2026-04-09
 **Author:** Nathan
 
 ---
@@ -321,16 +321,16 @@ solver.add_cost(-goodput_expr, name='neg_goodput')
 
 **Efficiency:** A `ca.Function` is created once by the factory. When called at multiple points in the NLP (e.g., once per weather product), CasADi creates multiple MX call nodes referencing the same underlying Function. AD reuses the function's internal derivative graph across all call sites.
 
-**Implemented library functions (as of v0.7):**
+**Implemented library functions (as of v0.8):**
 - **Cost functions:** `cost.quadratic`, `cost.rosenbrock`, `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `cost.least_squares`
+- **Cost (Phase 3c):** `cost.smooth_coverage` — differentiable sigmoid coverage indicator `1/(1+exp(-k*(ε−ε_min)))` — `machina/blocks/library/cost.py`
 - **Constraints:** `constraint.linear`
 - **Utilities:** `util.ttp_computation`, `util.sum`, `util.rotate_x/y/z`
 - **Transforms (Phase 3a):** `transform.koe_to_mee`, `transform.mee_to_koe`, `transform.mee_to_eci` — `machina/blocks/library/transforms.py`
 - **Transforms (Phase 3b):** `transform.stumpff_cs`, `transform.lagrange_coefficients`, `transform.universal_kepler`, `transform.propagate_universal` — `machina/blocks/library/transforms.py`
+- **Geometry (Phase 3c):** `geometry.ground_target_eci`, `geometry.elevation_angle` — `machina/blocks/library/geometry.py`
 
 **Planned but not yet implemented:**
-- **Geometry (Phase 3c):** `geometry.ground_target_eci`, `geometry.elevation_angle`
-- **Cost (Phase 3c):** `cost.smooth_coverage`
 - **Dynamics (Phase 5):** `dynamics.keplerian`, `dynamics.j2`, `dynamics.cartesian_two_body`
 - **Resource constraints:** `constraint.power_budget`, `constraint.compute_throughput`, `constraint.downlink_capacity` — determined to be structurally identical to `constraint.linear`; no dedicated factories will be added. Agent types wire these directly.
 
@@ -678,6 +678,8 @@ Agents resolve string paths to `SymbolDescriptor` objects. Paths are hierarchica
 | 29 | `mu` is a factory parameter (baked in) for all Phase 3b propagation functions | `mu` as a runtime function argument | Consistent with the `mee_to_eci` pattern established in Phase 3a. `mu` is a physical constant for a given problem, not an optimization variable. Baking it in at factory time keeps the rootfinder's parameter vector smaller and the function signatures cleaner. |
 | 30 | Stumpff Taylor threshold `EPS = 1e-4`; `TINY = 1e-32` denominator guard | Various | Taylor series with 4 terms is accurate to double precision for |ψ|<0.1; `1e-4` leaves a comfortable margin. `TINY = 1e-32` prevents NaN in the non-selected `ca.if_else` branch without affecting the selected branch's precision. |
 | 31 | `transform.lagrange_coefficients` computes α internally from r0, v0 rather than taking α as an input | Accept pre-computed α as input | The interface spec in A.4 listed α as an input, but computing it internally from r0 and v0 keeps the public signature cleaner and avoids the caller needing to pre-compute and pass a derived quantity. The function also needs r0 and v0 anyway (to compute r_mag and the final position vector). |
+| 32 | MEE altitude constraints use squared form: `(p-R_min)² - R_min²·(f²+g²) ≥ 0` | Direct form: `p/(1+e) - R_earth ≥ h_min` where `e = sqrt(f²+g²)` | `sqrt(f²+g²)` has zero gradient at f=g=0 (circular orbit). In constraint expressions this causes a degenerate constraint Jacobian at the circular orbit — LICQ fails, IPOPT declares infeasibility. The direct form is algebraically equivalent but the squared form is smooth everywhere including at e=0, with a well-defined Jacobian. **This is a load-bearing design choice for all MEE-based agents** — not a workaround. Any future agent that constrains perigee or apogee altitude must use this form. |
+| 33 | MEE namespace derived quantities (`orbital/ecc`, `orbital/sma`, `orbital/period`) are display-only; never wire them into NLP objectives or constraints | Use them as general-purpose MX expressions | These quantities contain `sqrt(f²+g²)`, which has a singular gradient at e=0. They are safe to read from `result.x_opt` after solving. If you were to pass `agent.resolve('orbital/ecc').symbol` into another agent's constraint expression, you would pull the singularity back into the NLP Jacobian. Future agent-to-agent coupling must stay in f/g space (raw MEE components), not derived eccentricity. |
 
 ---
 
@@ -754,11 +756,23 @@ Agents resolve string paths to `SymbolDescriptor` objects. Paths are hierarchica
 
 **Note on ordering:** Phase 3b is not required to unblock Phase 3c. `SingleSatCoverage` uses static orbital geometry — MEE elements as decision variables, true longitude L sampled at fixed points — so `transform.mee_to_eci` (already implemented) is sufficient. Phase 3b (dynamic propagation) is needed before Phase 3d when the flyby agent requires orbital state evolution. The recommended sequence is 3c → 3b → 3d → 3e, or 3b → 3c → 3d → 3e if propagation tests are prioritized.
 
-**Phase 3c — Coverage Geometry and Example Agent:**
-- [ ] Implement `geometry.ground_target_eci` and `geometry.elevation_angle` factories — `machina/blocks/library/geometry.py`
-- [ ] Implement `cost.smooth_coverage` factory
-- [ ] Implement `SingleSatCoverage` agent type — `machina/agents/single_sat_coverage.py`
-- [ ] Solve coverage optimization end-to-end, validate against analytical expectations
+**Phase 3c — Coverage Geometry and Example Agent ✓ COMPLETE**
+- [x] Implement `geometry.ground_target_eci` and `geometry.elevation_angle` factories — `machina/blocks/library/geometry.py`
+- [x] Implement `cost.smooth_coverage` factory — `machina/blocks/library/cost.py`
+- [x] Implement `SingleSatCoverage` agent type — `machina/agents/single_sat_coverage.py`
+- [x] Tests: 35 Layer 2 tests (geometry + smooth_coverage) — `tests/test_blocks_phase3c.py`
+- [x] Tests: 36 agent lifecycle + end-to-end tests — `tests/test_agents_phase3c.py`
+- [x] Example: `examples/coverage_optimization.py` — elevation profile, optimization, inclination sweep
+- [x] Solve coverage optimization end-to-end, validate against analytical expectations
+
+**Phase 3c implementation notes:**
+- `SingleSatCoverage` declares 9 quantities: 5 orbital MEE elements (flexible/variable), 4 always_parameter (sample_points/L, target/position, coverage/min_elevation, coverage/sigmoid_k). The `sample_points/L` parameter is internal to build() and not exposed in the namespace.
+- **Circular orbit Jacobian singularity:** `d/df[sqrt(f²+g²)] = f/sqrt(f²+g²)` is 0/0 at f=g=0. Mitigated by: (a) `ca.fmax(f²+g², TINY)` guard inside `ca.sqrt()` in derived quantities, (b) default initial guess f=0.01 (not 0.0).
+- **Squared altitude constraint formulation:** Original constraints `p/(1+e) >= R_min` contain `sqrt(f²+g²)` which has zero gradient at circular orbit. Reformulated as `(p-R_min)² - R_min²*(f²+g²) >= 0` — algebraically equivalent, smooth everywhere, no sqrt. Same for apogee. Constraint `lb=0, ub=inf`.
+- **h,k bounds [-1.5, 1.5]:** Covers inclinations 0–123°. Wider bounds (e.g., ±3) allow near-retrograde inclinations where IPOPT's Hessian becomes ill-conditioned and produces NaN.
+- **IPOPT convergence:** Use `acceptable_tol=1e-2, acceptable_iter=3` for reliable convergence. At the optimal solution (near circular orbit), the squared altitude constraint Jacobian is degenerate in f,g (zero gradient at e=0), causing IPOPT's multiplier computation to return NaN at strict tolerance. With `acceptable_tol`, IPOPT stops before reaching the degenerate region.
+- **Snapshot ECI geometry:** The coverage model holds the target fixed in ECI (no Earth rotation). RAAN determines which orbit passes over a fixed-ECI target. For Washington DC, RAAN≈240° gives ~65° max elevation for an ISS-like (i=51.6°, 500 km) orbit. RAAN=0° gives max elevation of −38° (never visible in snapshot geometry).
+- **N sample points:** N=24 (every 15° of true longitude) is sufficient for smooth optimization and reliable IPOPT convergence. Larger N (N=36+) can cause IPOPT to take more iterations into the numerically problematic region near optimal.
 
 **Phase 3d — FlybySatellite Agent:**
 - [ ] Implement `FlybySatellite` agent type — `machina/agents/flyby_satellite.py`
@@ -822,7 +836,7 @@ Agents resolve string paths to `SymbolDescriptor` objects. Paths are hierarchica
 
 9. ~~**`expand=True` as default:**~~ **PARTIALLY RESOLVED.** `ca.rootfinder` is compatible with `expand=True` in the tested CasADi version (confirmed by `test_expand_true_compatibility` in Phase 3b). The open question remains: should the solver backend *default* to `expand=True`? Still lean: default True, disable when `ca.Callback` is attached. Defer the backend default change until Phase 3c/3d when a real NLP with orbital elements needs it.
 
-10. **Variable scaling:** CasADi/IPOPT works best when variables are in the 0.01–100 range. Orbital mechanics variables span many orders of magnitude (km, rad/s, kg). Should the solver backend handle scaling automatically (user provides nominal values), or should agent types be responsible for their own scaling? Defer to Phase 3c implementation when working with orbital elements.
+10. **Variable scaling:** CasADi/IPOPT works best when variables are in the 0.01–100 range. Orbital mechanics variables span many orders of magnitude (km, rad/s, kg). Should the solver backend handle scaling automatically (user provides nominal values), or should agent types be responsible for their own scaling? **Phase 3c update:** `SingleSatCoverage` mixes `p` (~6000–8000 km) with `f,g,h,k` (dimensionless, ~0–1.5). IPOPT converges acceptably without explicit scaling using `ipopt.acceptable_tol=1e-2`. Gradient-based NLP scaling (`nlp_scaling_method='gradient-based'`) was tried but worsened convergence. Defer explicit scaling until Phase 3d when the altitude/velocity combination in flyby optimization is tested.
 
 11. **VP effect reduction models.** The functional relationship between resource allocation and TTP component reduction needs empirical models (from image processing compute benchmarks). The Layer 2 factories for these models will be specified when the data is available.
 
