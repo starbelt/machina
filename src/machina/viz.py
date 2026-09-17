@@ -41,10 +41,8 @@ cannot be recovered from the MX graph without deep CasADi introspection; only
 the leaf symbolic variables are accessible via ``ca.symvar()``.
 """
 
-import numpy as np
 import casadi as ca
 import networkx as nx
-
 
 # ---------------------------------------------------------------------------
 # Mathtext helpers
@@ -378,8 +376,8 @@ def draw_nlp_graph(G: nx.DiGraph,
     Returns:
         The matplotlib Axes object.
     """
-    import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
 
     # Assign a 'layer' attribute for multipartite layout (left = 0, right = 1).
     # Work on a copy to avoid mutating the caller's graph.
@@ -490,8 +488,7 @@ def export_dot(G: nx.DiGraph, path: str) -> None:
         node_type = data.get('type', '')
         H.nodes[node_id]['fillcolor'] = _DOT_FILL.get(node_type, 'white')
         H.nodes[node_id]['style']     = 'filled'
-        # DOT label: use canonical + display name only (no mathtext).
-        canonical = data.get('canonical', '')
+        # DOT label: display name only (no mathtext).
         raw_label = data.get('label', node_id).split('\n')[0]
         H.nodes[node_id]['label'] = raw_label
 

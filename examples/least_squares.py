@@ -15,11 +15,11 @@ Run from the project root:
     python examples/least_squares.py
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
-from machina.solver.SolverBackend import SolverBackend
 from machina.blocks import registry
+from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
 # ---------------------------------------------------------------------------

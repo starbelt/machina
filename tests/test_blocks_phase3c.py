@@ -121,8 +121,7 @@ class TestGroundTargetEci:
 
     def test_custom_R_earth(self):
         """Factory param R_earth is respected."""
-        R = 1.0  # unit sphere
-        r = _gt_eci(0.0, 0.0, R=1.0)
+        r = _gt_eci(0.0, 0.0, R=1.0)  # unit sphere
         np.testing.assert_allclose(r, [1.0, 0.0, 0.0], atol=1e-9)
 
 

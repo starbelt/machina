@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, Optional
+
 import numpy as np
 
 
@@ -41,7 +41,7 @@ class SolutionResult:
 
     # Optimal values for each registered decision variable, keyed by the name
     # supplied to add_variable(). Each value is a 1-D numpy array of length n.
-    x_opt: Dict[str, np.ndarray]
+    x_opt: dict[str, np.ndarray]
 
     # Optimal objective value, as a Python float.
     f_opt: float
@@ -71,7 +71,7 @@ class SolutionResult:
     # Parameter sensitivities (d f* / d p). None when no parameters were
     # registered. Requires {'calc_lam_p': True} in solver options for nonzero
     # values. Must be last field because it carries a default value.
-    lam_p: Optional[np.ndarray] = None
+    lam_p: np.ndarray | None = None
 
     def __getitem__(self, name: str) -> np.ndarray:
         """Shorthand for ``result.x_opt[name]``."""

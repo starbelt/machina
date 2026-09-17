@@ -1,6 +1,7 @@
 import warnings
-import casadi as ca
 from dataclasses import dataclass
+
+import casadi as ca
 
 
 class FunctionDescriptor:

@@ -76,12 +76,11 @@ import numpy as np
 
 from machina.agents.agent_type import (
     AgentType,
-    QuantityDeclaration,
     ConstraintDeclaration,
+    QuantityDeclaration,
 )
-from machina.blocks.descriptor import SymbolDescriptor
 from machina.blocks import registry
-
+from machina.blocks.descriptor import SymbolDescriptor
 
 # ---------------------------------------------------------------------------
 # Defaults

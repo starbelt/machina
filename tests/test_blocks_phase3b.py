@@ -20,7 +20,6 @@ import casadi as ca
 
 from machina.blocks import registry
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -456,7 +455,7 @@ class TestPropagateUniversal:
         If expand=True is incompatible with ca.rootfinder in the installed
         CasADi version, this test documents the limitation.
         """
-        from machina.solver.SolverBackend import SolverBackend
+        from machina.solver.backend import SolverBackend
 
         a = 6778.0
         r0, v0 = _circular_state(a)
@@ -476,7 +475,7 @@ class TestPropagateUniversal:
 
         try:
             sb.build(opts={'expand': True, 'ipopt.print_level': 0, 'print_time': 0})
-            result = sb.solve(p_val=np.concatenate([r0, v0]))
+            sb.solve(p_val=np.concatenate([r0, v0]))
             # Just check it ran without error; result.success may be True or False
             # for this degenerate problem (bounded dt, no constraint on final r)
         except Exception as exc:
@@ -487,7 +486,7 @@ class TestPropagateUniversal:
         Wire propagate_universal into a minimal NLP, build and solve.
         Optimise dt to minimise |r_final - r_target|² (trivial feasibility).
         """
-        from machina.solver.SolverBackend import SolverBackend
+        from machina.solver.backend import SolverBackend
 
         a = 6778.0
         r0_np, v0_np = _circular_state(a)

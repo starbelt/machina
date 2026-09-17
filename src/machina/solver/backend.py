@@ -1,7 +1,9 @@
 import warnings
+
 import casadi as ca
 import numpy as np
-from .SolutionResult import SolutionResult
+
+from .result import SolutionResult
 
 
 class SolverBackend:

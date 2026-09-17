@@ -41,7 +41,6 @@ import casadi as ca
 from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
 
-
 # ---------------------------------------------------------------------------
 # transform.koe_to_mee
 # ---------------------------------------------------------------------------

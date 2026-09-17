@@ -11,12 +11,12 @@ TestRegistry                    — register, get, list_registered, list_by_doma
 TestEndToEnd                    — full pipeline: registry → factory → descriptor → IPOPT
 """
 
-import pytest
-import numpy as np
 import casadi as ca
+import numpy as np
+import pytest
 
 from machina.blocks import FunctionDescriptor, SymbolDescriptor, registry
-from machina.solver.SolverBackend import SolverBackend
+from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
 

@@ -1,32 +1,57 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "machina-v2"
-version = "0.1.0"
-description = "Generic space mission optimization framework using CasADi/IPOPT"
+name = "machina"
+version = "0.2.0.dev0"
+description = "Component-based mission modelling and optimization on CasADi/IPOPT"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nathan Collins" }]
 requires-python = ">=3.10"
 dependencies = [
     "casadi>=3.6",
     "numpy>=1.24",
-    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
+viz = ["networkx>=3.0", "matplotlib>=3.7"]
+study = ["pandas>=2.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "networkx>=3.0",
     "matplotlib>=3.7",
+    "pandas>=2.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/starbelt/machina"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
-pythonpath = ["."]
+pythonpath = ["src"]
+addopts = "-q --tb=short"
 markers = [
-    "requires_casadi: test requires CasADi to be installed",
+    "requires_casadi: test needs CasADi installed",
+    "requires_bonmin: test needs the bonmin nlpsol plugin",
+    "requires_networkx: test needs networkx (viz extra)",
 ]
 
-[tool.setuptools.packages.find]
-include = ["machina*"]
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "E702", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E402"]
+"tests/*" = ["E402"]

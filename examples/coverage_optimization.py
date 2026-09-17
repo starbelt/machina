@@ -41,8 +41,8 @@ import math
 import warnings
 
 import casadi as ca
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from machina.agents import SingleSatCoverage
 from machina.blocks import registry
@@ -253,7 +253,7 @@ if result.success:
     cov_opt = coverage_mean(p_opt, f_opt, g_opt, h_opt, k_opt,
                              n_pts=360, k_sig=20.0, emin_deg=MIN_ELEV)
 
-    print(f"  Optimal orbit:")
+    print("  Optimal orbit:")
     print(f"    a    = {sma_opt:.1f} km  (alt ~ {sma_opt - R_EARTH:.0f} km)")
     print(f"    e    = {e_opt:.4f}")
     print(f"    i    = {inc_opt:.1f} deg")
@@ -272,7 +272,7 @@ if result.success:
 
     fig2, ax = plt.subplots(figsize=(10, 4))
     fig2.suptitle(
-        f"Coverage optimization over Washington DC -- elevation profiles",
+        "Coverage optimization over Washington DC -- elevation profiles",
         fontsize=11, fontweight='bold',
     )
     ax.plot(np.degrees(L_fine), elevs_init, 'royalblue', linewidth=1.5,

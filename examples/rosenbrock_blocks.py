@@ -26,8 +26,8 @@ Run from the project root:
 
 import matplotlib.pyplot as plt
 
-from machina.solver.SolverBackend import SolverBackend
 from machina.blocks import registry
+from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ result = solver.solve()
 # ---------------------------------------------------------------------------
 # 5. Inspect results
 # ---------------------------------------------------------------------------
-print(f"\n--- Rosenbrock result (via block library) ---")
+print("\n--- Rosenbrock result (via block library) ---")
 print(f"Converged:  {result.success}")
 print(f"xy*[0]    = {result['xy'][0]:.8f}  (expected 1.0)")
 print(f"xy*[1]    = {result['xy'][1]:.8f}  (expected 1.0)")

@@ -28,7 +28,7 @@ from machina.agents.agent_type import (
 from machina.blocks import registry
 from machina.blocks.descriptor import SymbolDescriptor
 from machina.compiler.compiler_stub import CompilerStub
-from machina.solver.SolverBackend import SolverBackend
+from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
 

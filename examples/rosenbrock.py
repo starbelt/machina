@@ -14,8 +14,7 @@ Run from the project root:
     python examples/rosenbrock.py
 """
 
-import casadi as ca
-from machina.solver.SolverBackend import SolverBackend
+from machina.solver.backend import SolverBackend
 
 # ---------------------------------------------------------------------------
 # 1. Create the backend
@@ -50,7 +49,7 @@ result = backend.solve()
 # ---------------------------------------------------------------------------
 # 6. Inspect results
 # ---------------------------------------------------------------------------
-print(f"\n--- Rosenbrock result ---")
+print("\n--- Rosenbrock result ---")
 print(f"Converged:  {result.success}")
 print(f"x*        = {result['x'][0]:.8f}  (expected 1.0)")
 print(f"y*        = {result['y'][0]:.8f}  (expected 1.0)")

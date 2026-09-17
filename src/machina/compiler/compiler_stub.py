@@ -38,9 +38,9 @@ import warnings
 import casadi as ca
 import numpy as np
 
-from machina.solver.SolverBackend import SolverBackend
 from machina.agents.agent_type import AgentType, QuantityDeclaration
 from machina.blocks.descriptor import SymbolDescriptor
+from machina.solver.backend import SolverBackend
 
 
 class CompilerStub:

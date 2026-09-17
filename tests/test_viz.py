@@ -12,14 +12,15 @@ TestDrawNlpGraph           — matplotlib rendering smoke tests
 TestFlyboyIntegration      — end-to-end wiring check using the flyby problem
 """
 
-import pytest
 import casadi as ca
 import matplotlib
+import pytest
+
 matplotlib.use('Agg')  # non-interactive backend; must be set before pyplot import
 
-from machina.solver.SolverBackend import SolverBackend
-from machina.viz import build_nlp_graph, draw_nlp_graph
 from machina.blocks import registry
+from machina.solver.backend import SolverBackend
+from machina.viz import build_nlp_graph, draw_nlp_graph
 
 pytestmark = pytest.mark.requires_casadi
 
@@ -59,7 +60,7 @@ class TestBuildNlpGraph:
 
     def test_parameter_nodes_present(self):
         s = make_solver()
-        x = s.add_variable('x', 1)
+        s.add_variable('x', 1)
         p = s.add_parameter('my_param', 2)
         s.add_cost(p[0] * s._w[0], name='param_cost')
         G = build_nlp_graph(s)

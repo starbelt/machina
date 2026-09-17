@@ -29,9 +29,9 @@ Run from the project root:
 import math
 
 import casadi as ca
-import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D   # noqa: F401  (registers 3D projection)
+import numpy as np
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3D projection)
 
 from machina.blocks import registry
 

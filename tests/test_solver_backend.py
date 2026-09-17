@@ -1,5 +1,5 @@
 """
-Tests for machina.solver.SolverBackend and SolutionResult.
+Tests for machina.solver.backend and SolutionResult.
 
 Sections
 --------
@@ -14,12 +14,12 @@ All tests are marked `requires_casadi` at the module level and are
 auto-skipped by conftest when CasADi is not installed.
 """
 
-import pytest
-import numpy as np
 import casadi as ca
+import numpy as np
+import pytest
 
-from machina.solver.SolverBackend import SolverBackend
-from machina.solver.SolutionResult import SolutionResult
+from machina.solver.backend import SolverBackend
+from machina.solver.result import SolutionResult
 
 pytestmark = pytest.mark.requires_casadi
 

@@ -1,17 +1,25 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
-dist/
 build/
-.eggs/
-*.egg
+dist/
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
-*.so
+
+# Editors / tooling
 .idea/
 .vscode/
 *.swp
 *.swo
+.claude/settings.local.json
+
+# Local-only material
 results/
+problems/
+icarus-dynamics-main/
+
+# Local-only agent instructions (reference private notes)
+CLAUDE.md

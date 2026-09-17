@@ -1,6 +1,7 @@
 import casadi as ca
-from machina.blocks.registry import register
+
 from machina.blocks.descriptor import FunctionDescriptor
+from machina.blocks.registry import register
 
 
 @register('util.ttp_computation')

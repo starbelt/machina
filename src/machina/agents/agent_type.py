@@ -27,8 +27,7 @@ from dataclasses import dataclass
 import casadi as ca
 import numpy as np
 
-from machina.blocks.descriptor import SymbolDescriptor, _VALID_SEMANTIC_TYPES
-
+from machina.blocks.descriptor import _VALID_SEMANTIC_TYPES, SymbolDescriptor
 
 # ---------------------------------------------------------------------------
 # Validation sets

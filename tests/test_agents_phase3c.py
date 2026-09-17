@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from machina.agents import SingleSatCoverage
-from machina.agents.agent_type import QuantityDeclaration, ConstraintDeclaration
+from machina.agents.agent_type import ConstraintDeclaration, QuantityDeclaration
 from machina.blocks.descriptor import SymbolDescriptor
 from machina.compiler.compiler_stub import CompilerStub
 
@@ -423,23 +423,7 @@ class TestSingleSatCoverageEndToEnd:
 
     def test_coverage_total_in_unit_interval(self):
         """Coverage fraction is in [0, 1]."""
-        result, agent, _ = self._run_optimization(n_pts=12)
-        p_opt = float(result['sat/orbital/p'][0])
-        f_opt = float(result['sat/orbital/f'][0])
-        g_opt = float(result['sat/orbital/g'][0])
-        h_opt = float(result['sat/orbital/h'][0])
-        k_opt = float(result['sat/orbital/k'][0])
-
-        # Build a standalone ca.Function to evaluate coverage/total
-        p_sym = ca.MX.sym('p', 1, 1)
-        f_sym = ca.MX.sym('f', 1, 1)
-        g_sym = ca.MX.sym('g', 1, 1)
-        h_sym = ca.MX.sym('h', 1, 1)
-        k_sym = ca.MX.sym('k', 1, 1)
-
-        cov_expr = agent.resolve('coverage/total').symbol
-        # Create function: but we need the original MX symbols.
-        # Instead, just check that the optimal cost is a valid fraction.
+        result, _, _ = self._run_optimization(n_pts=12)
         # The optimizer minimizes -coverage, so f_opt should be in [-1, 0].
         assert result.f_opt >= -1.0 - 1e-6
         assert result.f_opt <= 0.0 + 1e-6

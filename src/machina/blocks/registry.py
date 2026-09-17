@@ -17,7 +17,7 @@ Usage:
     registry.list_by_domain('cost')
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 _registry: dict[str, Callable] = {}
 

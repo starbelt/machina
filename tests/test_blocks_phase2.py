@@ -10,12 +10,12 @@ TestFunctionReuse        — same FunctionDescriptor called at multiple NLP site
 TestFlyboyToyProblem     — full end-to-end: sigmoid + aggregate + ttp_computation + IPOPT
 """
 
-import pytest
-import numpy as np
 import casadi as ca
+import numpy as np
+import pytest
 
-from machina.blocks import registry, FunctionDescriptor
-from machina.solver.SolverBackend import SolverBackend
+from machina.blocks import registry
+from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
 

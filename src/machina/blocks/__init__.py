@@ -13,10 +13,11 @@ Usage:
     cost_expr  = descriptor(x=x_mx)
 """
 
-from .descriptor import FunctionDescriptor, SymbolDescriptor
-from . import registry
-
 # Import library package to trigger all @register decorators.
-from . import library  # noqa: F401
+from . import (
+    library,  # noqa: F401
+    registry,
+)
+from .descriptor import FunctionDescriptor, SymbolDescriptor
 
 __all__ = ['FunctionDescriptor', 'SymbolDescriptor', 'registry']
