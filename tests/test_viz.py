@@ -62,7 +62,7 @@ class TestBuildNlpGraph:
         s = make_solver()
         s.add_variable('x', 1)
         p = s.add_parameter('my_param', 2)
-        s.add_cost(p[0] * s._w[0], name='param_cost')
+        s.add_cost(p[0] * s.symbol_of('x'), name='param_cost')
         G = build_nlp_graph(s)
         assert 'param:my_param' in G.nodes
 

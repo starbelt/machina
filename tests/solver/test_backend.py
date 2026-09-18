@@ -56,15 +56,17 @@ class TestRegistration:
     def test_add_variable_scalar_broadcast(self):
         b = make_backend()
         b.add_variable("x", 3, lb=-1.0, ub=2.0, initial_guess=0.5)
-        assert b._lbw == [-1.0, -1.0, -1.0]
-        assert b._ubw == [2.0, 2.0, 2.0]
-        assert b._w0 == [0.5, 0.5, 0.5]
+        lb, ub = b.bounds("x")
+        np.testing.assert_array_equal(lb, [-1.0, -1.0, -1.0])
+        np.testing.assert_array_equal(ub, [2.0, 2.0, 2.0])
+        np.testing.assert_array_equal(b.initial_guess("x"), [0.5, 0.5, 0.5])
 
     def test_add_variable_array_bounds(self):
         b = make_backend()
         b.add_variable("x", 3, lb=[-1.0, -2.0, -3.0], ub=[1.0, 2.0, 3.0])
-        assert b._lbw == [-1.0, -2.0, -3.0]
-        assert b._ubw == [1.0, 2.0, 3.0]
+        lb, ub = b.bounds("x")
+        np.testing.assert_array_equal(lb, [-1.0, -2.0, -3.0])
+        np.testing.assert_array_equal(ub, [1.0, 2.0, 3.0])
 
     def test_add_variable_duplicate_name_raises(self):
         b = make_backend()
@@ -75,8 +77,9 @@ class TestRegistration:
     def test_add_variable_offset_tracking_single(self):
         b = make_backend()
         b.add_variable("x", 4)
-        assert b._var_map["x"] == (0, 4, (4, 1))
-        assert b._offset == 4
+        assert b.slice_of("x") == slice(0, 4)
+        assert b.shape_of("x") == (4, 1)
+        assert b.n_x == 4
 
     def test_add_variable_offset_tracking_multiple(self):
         """Each variable occupies a contiguous, non-overlapping slice."""
@@ -84,15 +87,17 @@ class TestRegistration:
         b.add_variable("a", 2)
         b.add_variable("b", 3)
         b.add_variable("c", 1)
-        assert b._var_map["a"] == (0, 2, (2, 1))
-        assert b._var_map["b"] == (2, 5, (3, 1))
-        assert b._var_map["c"] == (5, 6, (1, 1))
-        assert b._offset == 6
+        assert (b.slice_of("a"), b.shape_of("a")) == (slice(0, 2), (2, 1))
+        assert (b.slice_of("b"), b.shape_of("b")) == (slice(2, 5), (3, 1))
+        assert (b.slice_of("c"), b.shape_of("c")) == (slice(5, 6), (1, 1))
+        assert b.variable_order() == ["a", "b", "c"]
+        assert b.n_x == 6
 
-    def test_add_variable_added_to_names_set(self):
+    def test_add_variable_added_to_namespace(self):
         b = make_backend()
+        assert not b.has("x")
         b.add_variable("x", 1)
-        assert "x" in b._names
+        assert b.has("x")
 
     # --- add_parameter ------------------------------------------------------
 
@@ -119,9 +124,10 @@ class TestRegistration:
         b = make_backend()
         b.add_parameter("p1", 2)
         b.add_parameter("p2", 3)
-        assert b._param_map["p1"] == (0, 2, (2, 1))
-        assert b._param_map["p2"] == (2, 5, (3, 1))
-        assert b._p_offset == 5
+        assert (b.slice_of("p1"), b.shape_of("p1")) == (slice(0, 2), (2, 1))
+        assert (b.slice_of("p2"), b.shape_of("p2")) == (slice(2, 5), (3, 1))
+        assert b.parameter_order() == ["p1", "p2"]
+        assert b.n_p == 5
 
     # --- add_constraint -----------------------------------------------------
 
@@ -129,33 +135,39 @@ class TestRegistration:
         b = make_backend()
         x = b.add_variable("x", 3)
         b.add_constraint(x, lb=0.0, ub=1.0)
-        assert len(b._g) == 1
+        assert len(b.constraints()) == 1
+        assert b.n_g == 3
 
     def test_add_constraint_scalar_bound_broadcast(self):
         b = make_backend()
         x = b.add_variable("x", 3)
         b.add_constraint(x, lb=0.0, ub=1.0)
-        assert b._lbg == [0.0, 0.0, 0.0]
-        assert b._ubg == [1.0, 1.0, 1.0]
+        con = b.constraints()[0]
+        np.testing.assert_array_equal(con.lb, [0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(con.ub, [1.0, 1.0, 1.0])
 
     def test_add_constraint_array_bounds(self):
         b = make_backend()
         x = b.add_variable("x", 3)
         b.add_constraint(x, lb=[-1.0, -2.0, -3.0], ub=[1.0, 2.0, 3.0])
-        assert b._lbg == [-1.0, -2.0, -3.0]
-        assert b._ubg == [1.0, 2.0, 3.0]
+        con = b.constraints()[0]
+        np.testing.assert_array_equal(con.lb, [-1.0, -2.0, -3.0])
+        np.testing.assert_array_equal(con.ub, [1.0, 2.0, 3.0])
 
     def test_add_constraint_records_name_and_size(self):
         b = make_backend()
         x = b.add_variable("x", 2)
         b.add_constraint(x, lb=0.0, name="my_con")
-        assert b._constraint_names[-1] == ("my_con", 2)
+        con = b.constraints()[-1]
+        assert (con.name, con.n_rows, con.auto_named) == ("my_con", 2, False)
 
     def test_add_constraint_name_optional(self):
         b = make_backend()
         x = b.add_variable("x", 1)
         b.add_constraint(x)   # no name — should not raise
-        assert b._constraint_names[-1][0] is None
+        con = b.constraints()[-1]
+        assert con.auto_named
+        assert con.name == "g0"
 
     def test_add_constraint_does_not_pollute_names_set(self):
         """Constraint names must NOT enter the variable/parameter namespace."""
@@ -169,8 +181,10 @@ class TestRegistration:
         b = make_backend()
         x = b.add_variable("x", 2)
         b.add_equality(x - 1.0)
-        assert b._lbg == [0.0, 0.0]
-        assert b._ubg == [0.0, 0.0]
+        con = b.constraints()[0]
+        np.testing.assert_array_equal(con.lb, [0.0, 0.0])
+        np.testing.assert_array_equal(con.ub, [0.0, 0.0])
+        assert con.is_equality
 
     def test_add_equality_delegates_to_add_constraint(self):
         """add_equality(expr) is equivalent to add_constraint(expr, lb=0, ub=0)."""
@@ -182,8 +196,9 @@ class TestRegistration:
         x2 = b2.add_variable("x", 1)
         b2.add_constraint(x2 - 5.0, lb=0.0, ub=0.0)
 
-        assert b1._lbg == b2._lbg
-        assert b1._ubg == b2._ubg
+        c1, c2 = b1.constraints()[0], b2.constraints()[0]
+        np.testing.assert_array_equal(c1.lb, c2.lb)
+        np.testing.assert_array_equal(c1.ub, c2.ub)
 
     # --- add_cost -----------------------------------------------------------
 
@@ -198,7 +213,7 @@ class TestRegistration:
         x = b.add_variable("x", 1)
         b.add_cost(x**2, name="term1")
         b.add_cost(x**2, name="term2")
-        assert len(b._cost_terms) == 2
+        assert [c.name for c in b.cost_terms()] == ["term1", "term2"]
 
     def test_add_cost_does_not_pollute_names_set(self):
         """Cost names must NOT enter the variable/parameter namespace."""
@@ -231,9 +246,9 @@ class TestBuild:
         b = make_backend()
         x = b.add_variable("x", 1)
         b.add_cost(x**2)
-        assert not b._built
+        assert not b.is_built
         b.build()
-        assert b._built
+        assert b.is_built
 
     def test_build_twice_raises(self):
         b = make_backend()
@@ -249,7 +264,7 @@ class TestBuild:
         x = b.add_variable("x", 1)
         b.add_cost(x**2)
         b.build(opts={"ipopt.tol": 1e-10, "ipopt.max_iter": 500})
-        assert b._built
+        assert b.is_built
 
     def test_build_no_parameters_omits_p_key(self):
         """
@@ -461,7 +476,7 @@ class TestSolveConvergence:
     def test_multi_variable_extraction(self):
         """
         Three separately registered variables of different sizes.
-        Verifies that _var_map slicing is correct for each.
+        Verifies that per-variable slicing is correct for each.
 
         minimize  (x - 1)^2 + ||y - [2, 3]||^2 + ||z - [4, 5, 6]||^2
         Solution: x* = 1,  y* = [2, 3],  z* = [4, 5, 6],  f* = 0
@@ -553,10 +568,8 @@ class TestResultInterface:
     def test_lam_x_shape_matches_total_variable_size(self):
         """lam_x length must equal the total number of decision variable elements."""
         b = make_backend()
-        b.add_variable("a", 2, initial_guess=0.0)
-        b.add_variable("b", 3, initial_guess=0.0)
-        x_a = b._w[0]
-        x_b = b._w[1]
+        x_a = b.add_variable("a", 2, initial_guess=0.0)
+        x_b = b.add_variable("b", 3, initial_guess=0.0)
         b.add_cost(ca.sumsqr(x_a) + ca.sumsqr(x_b))
         b.build()
         res = b.solve()
@@ -577,7 +590,7 @@ class TestResultInterface:
         b = make_backend()
         b.add_variable("alpha", 2, initial_guess=0.0)
         b.add_variable("beta", 1, initial_guess=0.0)
-        w0, w1 = b._w
+        w0, w1 = b.symbol_of("alpha"), b.symbol_of("beta")
         b.add_cost(ca.sumsqr(w0) + ca.sumsqr(w1))
         b.build()
         res = b.solve()

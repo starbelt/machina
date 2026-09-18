@@ -183,8 +183,9 @@ def build_nlp_graph(solver) -> nx.DiGraph:
     """
     Build a directed dependency graph from a SolverBackend's registered state.
 
-    Reads the solver's internal maps and expression lists directly. The solver
-    does not need to be built or solved before calling this function.
+    Reads the solver's public records (``variables()``, ``parameters()``,
+    ``cost_terms()``, ``constraints()``). The solver does not need to be built
+    or solved before calling this function.
 
     Node types and their attributes
     --------------------------------
@@ -212,8 +213,11 @@ def build_nlp_graph(solver) -> nx.DiGraph:
         A ``networkx.DiGraph``.
     """
     G = nx.DiGraph()
-    var_map   = solver._var_map
-    param_map = solver._param_map
+    # name -> (start, end, shape), the form _symvar_deps expects.
+    var_map   = {r.name: (r.slice.start, r.slice.stop, r.shape)
+                 for r in solver.variables()}
+    param_map = {r.name: (r.slice.start, r.slice.stop, r.shape)
+                 for r in solver.parameters()}
 
     # ------------------------------------------------------------------
     # Variable nodes (left column)
@@ -236,10 +240,12 @@ def build_nlp_graph(solver) -> nx.DiGraph:
     # ------------------------------------------------------------------
     # Cost nodes (right column)
     # ------------------------------------------------------------------
-    n_costs = len(solver._cost_terms)
-    for i, (name, expr) in enumerate(solver._cost_terms):
+    costs   = solver.cost_terms()
+    n_costs = len(costs)
+    for i, cost in enumerate(costs):
+        expr         = cost.weighted
         node_id      = f'cost:{i}'
-        display_name = name if name is not None else f'cost_{i}'
+        display_name = cost.name if not cost.auto_named else f'cost_{i}'
         canonical    = _canonical('J', i, n_costs)
 
         deps    = _symvar_deps(expr, var_map, param_map)
@@ -262,13 +268,8 @@ def build_nlp_graph(solver) -> nx.DiGraph:
     # First pass: determine equality/inequality for each constraint so
     # we can compute per-type totals for correct subscript numbering.
     # ------------------------------------------------------------------
-    constraint_is_eq = []
-    lbg_offset = 0
-    for _, (_, n_rows) in zip(solver._g, solver._constraint_names):
-        lbg_i = solver._lbg[lbg_offset: lbg_offset + n_rows]
-        ubg_i = solver._ubg[lbg_offset: lbg_offset + n_rows]
-        constraint_is_eq.append(all(lb == ub for lb, ub in zip(lbg_i, ubg_i)))
-        lbg_offset += n_rows
+    constraints = solver.constraints()
+    constraint_is_eq = [con.is_equality for con in constraints]
 
     n_equalities   = sum(constraint_is_eq)
     n_inequalities = len(constraint_is_eq) - n_equalities
@@ -276,11 +277,10 @@ def build_nlp_graph(solver) -> nx.DiGraph:
     # Second pass: build nodes and edges.
     eq_idx   = 0
     ineq_idx = 0
-    lbg_offset = 0
-    for i, (g_expr, (cname, n_rows)) in enumerate(
-            zip(solver._g, solver._constraint_names)):
+    for i, con in enumerate(constraints):
+        g_expr, n_rows = con.expr, con.n_rows
         node_id      = f'con:{i}'
-        display_name = cname if cname is not None else f'con_{i}'
+        display_name = con.name if not con.auto_named else f'con_{i}'
         is_eq        = constraint_is_eq[i]
 
         if is_eq:
@@ -289,7 +289,6 @@ def build_nlp_graph(solver) -> nx.DiGraph:
         else:
             canonical = _canonical('g', ineq_idx, n_inequalities)
             ineq_idx += 1
-        lbg_offset += n_rows
 
         deps    = _symvar_deps(g_expr, var_map, param_map)
         in_size = sum(m * n for _, _, (m, n) in deps)

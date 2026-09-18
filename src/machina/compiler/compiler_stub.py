@@ -23,6 +23,10 @@ overrides = {
         'lb':            float | np.ndarray,         # override lower bound
         'ub':            float | np.ndarray,         # override upper bound
         'initial_guess': float | np.ndarray,         # override initial guess
+        'scale':         float | np.ndarray,         # nominal magnitude (variables)
+    },
+    '{agent_name}/{constraint_name}': {
+        'scale':         float,                      # nominal magnitude of the constraint
     },
     ...
 }
@@ -63,9 +67,6 @@ class CompilerStub:
             self._solver = SolverBackend(solver_opts=solver_opts or {})
 
         self._agents: list[AgentType] = []
-        # Maps full path '{agent_name}/{qty_path}' → flat numpy array of
-        # numeric values, for quantities assigned as parameters.
-        self._param_values: dict[str, np.ndarray] = {}
         self._compiled = False
 
     # ------------------------------------------------------------------
@@ -155,11 +156,13 @@ class CompilerStub:
                     sym = self._solver.add_variable(
                         full_path, decl.shape,
                         lb=lb, ub=ub, initial_guess=guess,
+                        scale=override.get('scale', 1.0),
                     )
                 else:  # 'parameter'
-                    sym = self._solver.add_parameter(full_path, decl.shape)
-                    self._param_values[full_path] = (
-                        np.asarray(value).flatten()
+                    # The backend stores the value and flattens matrix
+                    # values column-major to match ca.vec.
+                    sym = self._solver.add_parameter(
+                        full_path, decl.shape, value=value,
                     )
 
                 symbols[decl.path] = sym
@@ -167,11 +170,13 @@ class CompilerStub:
             constraints = agent.build(symbols)
 
             for cdecl in constraints:
+                cname = f"{agent.name}/{cdecl.name}"
                 self._solver.add_constraint(
                     cdecl.expr,
                     lb=cdecl.lb,
                     ub=cdecl.ub,
-                    name=f"{agent.name}/{cdecl.name}",
+                    name=cname,
+                    scale=overrides.get(cname, {}).get('scale', 1.0),
                 )
 
         self._compiled = True
@@ -298,8 +303,8 @@ class CompilerStub:
         """
         Invoke the solver and return a SolutionResult.
 
-        Assembles the parameter value vector (in registration order) from
-        self._param_values and passes it to solver.solve().
+        Parameter values were stored on the backend at compile() time, so no
+        parameter vector needs to be assembled here.
 
         Returns
         -------
@@ -310,23 +315,10 @@ class CompilerStub:
         RuntimeError
             If build_solver() has not been called yet.
         """
-        if not self._solver._built:
+        if not self._solver.is_built:
             raise RuntimeError(
                 "Call build_solver() before solve()."
             )
-
-        if self._param_values:
-            # Sort parameter entries by their start offset in the flat
-            # parameter vector to reconstruct p_val in registration order.
-            sorted_names = sorted(
-                self._solver._param_map.keys(),
-                key=lambda n: self._solver._param_map[n][0],
-            )
-            p_arr = np.concatenate(
-                [self._param_values[name] for name in sorted_names]
-            )
-            return self._solver.solve(p_val=p_arr)
-
         return self._solver.solve()
 
     # ------------------------------------------------------------------
