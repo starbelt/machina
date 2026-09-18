@@ -650,23 +650,23 @@ class TestCompilerStubLifecycle:
     def test_always_variable_creates_variable(self):
         compiler, _ = self._make_compiled_compiler()
         # 'sat/state/ecc' is always_variable
-        assert 'sat/state/ecc' in compiler.solver._var_map
+        assert 'sat/state/ecc' in compiler.solver.variable_order()
 
     def test_always_parameter_creates_parameter(self):
         compiler, _ = self._make_compiled_compiler()
         # 'sat/mu' is always_parameter
-        assert 'sat/mu' in compiler.solver._param_map
+        assert 'sat/mu' in compiler.solver.parameter_order()
 
     def test_flexible_default_variable_creates_variable(self):
         compiler, _ = self._make_compiled_compiler()
         # 'sat/state/sma' is flexible with default_role='variable'
-        assert 'sat/state/sma' in compiler.solver._var_map
+        assert 'sat/state/sma' in compiler.solver.variable_order()
 
     def test_flexible_override_to_parameter(self):
         overrides = {'sat/state/sma': {'role': 'parameter', 'value': 7000.0}}
         compiler, _ = self._make_compiled_compiler(overrides=overrides)
-        assert 'sat/state/sma' in compiler.solver._param_map
-        assert 'sat/state/sma' not in compiler.solver._var_map
+        assert 'sat/state/sma' in compiler.solver.parameter_order()
+        assert 'sat/state/sma' not in compiler.solver.variable_order()
 
     def test_override_invalid_role_raises(self):
         compiler = self._make_compiler()
@@ -701,11 +701,11 @@ class TestCompilerStubLifecycle:
     def test_constraint_registered_with_solver(self):
         compiler, _ = self._make_compiled_compiler()
         # MockAgent.build() returns one ConstraintDeclaration
-        assert len(compiler.solver._constraint_names) == 1
+        assert len(compiler.solver.constraints()) == 1
 
     def test_constraint_name_prefixed_with_agent_name(self):
         compiler, _ = self._make_compiled_compiler()
-        name, _ = compiler.solver._constraint_names[0]
+        name = compiler.solver.constraints()[0].name
         assert name.startswith('sat/')
 
     # --- double compile ---
