@@ -46,7 +46,7 @@ import casadi as ca
 from machina.solver import SolverBackend
 from machina.blocks import registry
 
-solver = SolverBackend(solver_opts={"ipopt.print_level": 0, "print_time": 0})
+solver = SolverBackend(verbose=False)          # solver="bonmin" for discrete variables
 xy = solver.add_variable("xy", 2, lb=-2.0, ub=2.0, initial_guess=0.0)
 
 rosenbrock = registry.get("cost.rosenbrock")(a=1.0, b=100.0)   # a FunctionDescriptor
@@ -54,8 +54,15 @@ solver.add_cost(rosenbrock(xy=xy), name="rosenbrock")
 
 solver.build()
 result = solver.solve()
-print(result.success, result["xy"], result.f_opt)
+print(result.success, result.status, result["xy"], result.f_opt)
 ```
+
+The backend is plugin-agnostic (IPOPT, bonmin, sqpmethod, fatrop) and works in physical units
+throughout: `scale=` on a variable or constraint conditions the problem without changing what you
+read back. Parameters carry stored values (`add_parameter(value=...)`, `set_parameter`), bounds
+can be edited or variables fixed after `build()`, `solve(warm_start=previous_result)` reuses the
+previous duals, and results give named access to shadow prices (`result.constraint("power").multiplier`),
+parameter sensitivities and the per-term cost breakdown.
 
 More in `examples/`: `least_squares.py` (matrix parameters), `flyby_goodput.py` (three-product
 goodput with a shared compute budget), `kepler_propagation.py` (universal-variable propagation
@@ -65,7 +72,7 @@ across orbit regimes), `coverage_optimization.py` (the full agent + compiler sta
 
 | Path | Contents |
 |---|---|
-| `src/machina/solver/` | `SolverBackend` (CasADi `nlpsol` wrapper, MX) and `SolutionResult` |
+| `src/machina/solver/` | `SolverBackend` (CasADi `nlpsol` wrapper, MX), `SolutionResult`, public records, per-plugin options |
 | `src/machina/blocks/` | `FunctionDescriptor`, `SymbolDescriptor`, the factory registry, and the factory library (`cost`, `constraint`, `util`, `transforms`, `geometry`) |
 | `src/machina/agents/` | `AgentType` declare/build lifecycle and `SingleSatCoverage` |
 | `src/machina/compiler/` | `CompilerStub`: declare → assign roles → build → register → solve |
