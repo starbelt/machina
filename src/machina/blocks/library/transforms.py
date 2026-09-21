@@ -40,6 +40,7 @@ import casadi as ca
 
 from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
+from machina.library.numerics import EPS, TINY
 
 # ---------------------------------------------------------------------------
 # transform.koe_to_mee
@@ -218,17 +219,19 @@ def make_stumpff_cs() -> FunctionDescriptor:
         C(ψ):  ψ>0: (1−cos√ψ)/ψ          ψ=0: 1/2     ψ<0: (cosh√(−ψ)−1)/(−ψ)
         S(ψ):  ψ>0: (√ψ−sin√ψ)/(√ψ)³     ψ=0: 1/6     ψ<0: (sinh√(−ψ)−√(−ψ))/(√(−ψ))³
 
-    Taylor series (used for |ψ| < EPS = 1e-4 to avoid cancellation near zero):
+    Taylor series (used for |ψ| < EPS, from machina.library.numerics, to avoid
+    cancellation near zero):
         C(ψ) ≈ 1/2 − ψ/24 + ψ²/720 − ψ³/40320
         S(ψ) ≈ 1/6 − ψ/120 + ψ²/5040 − ψ³/362880
 
-    Both series are accurate to machine precision for |ψ| < 0.1; the 1e-4
-    threshold leaves a comfortable margin.
+    Both series are accurate to machine precision for |ψ| < 0.1; EPS sits
+    three orders of magnitude inside that.
 
     Implementation note
     -------------------
     ca.if_else evaluates BOTH branches symbolically; the non-selected branch
-    must be numerically defined everywhere.  TINY = 1e-32 guards denominators
+    must be numerically defined everywhere.  TINY (machina.library.numerics)
+    guards denominators
     (e.g., sqrt(fmax(psi, TINY)) is real-valued for all psi).
 
     References
@@ -238,8 +241,6 @@ def make_stumpff_cs() -> FunctionDescriptor:
     """
     psi = ca.SX.sym('psi')
 
-    EPS = 1e-4      # switch to Taylor for |ψ| < EPS
-    TINY = 1e-32    # denominator guard (non-selected branch)
 
     # --- Taylor series (always numerically safe) ---
     C_tay = 0.5 - psi/24 + psi**2/720 - psi**3/40320

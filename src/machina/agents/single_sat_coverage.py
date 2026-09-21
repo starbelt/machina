@@ -81,6 +81,7 @@ from machina.agents.agent_type import (
 )
 from machina.blocks import registry
 from machina.blocks.descriptor import SymbolDescriptor
+from machina.library.numerics import TINY
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -389,12 +390,10 @@ class SingleSatCoverage(AgentType):
         # Derived orbital quantities
         # ------------------------------------------------------------------
         # Guard sqrt(f^2+g^2) against 0/0 in its Jacobian at f=g=0.
-        # TINY = 1e-32 follows the same pattern as the Stumpff functions.
-        _TINY = 1e-32
         e2_expr  = f ** 2 + g ** 2
-        e_expr   = ca.sqrt(ca.fmax(e2_expr, _TINY))
+        e_expr   = ca.sqrt(ca.fmax(e2_expr, TINY))
         sma_expr = p / (1 - e2_expr)
-        inc_expr = 2 * ca.atan(ca.sqrt(ca.fmax(h ** 2 + k ** 2, _TINY)))
+        inc_expr = 2 * ca.atan(ca.sqrt(ca.fmax(h ** 2 + k ** 2, TINY)))
         T_expr   = 2 * math.pi * ca.sqrt(sma_expr ** 3 / self._mu)
 
         # ------------------------------------------------------------------

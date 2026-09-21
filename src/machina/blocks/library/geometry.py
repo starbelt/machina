@@ -14,9 +14,7 @@ import casadi as ca
 
 from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
-
-_TINY = 1e-32   # Guard for division by near-zero norms (same pattern as transforms.py)
-
+from machina.library.numerics import TINY
 
 # ---------------------------------------------------------------------------
 # geometry.ground_target_eci
@@ -113,7 +111,7 @@ def make_elevation_angle() -> FunctionDescriptor:
 
     Notes
     -----
-    The _TINY guard on ||rho|| prevents NaN when r_sat == r_target
+    The TINY guard on ||rho|| prevents NaN when r_sat == r_target
     (degenerate case, not physical).  The dot-product is clamped to
     [-1, 1] before arcsin to avoid domain errors from floating-point noise.
     """
@@ -123,11 +121,11 @@ def make_elevation_angle() -> FunctionDescriptor:
     # Range vector
     rho      = r_sat - r_target
     rho_norm = ca.norm_2(rho)
-    rho_hat  = rho / ca.fmax(rho_norm, _TINY)
+    rho_hat  = rho / ca.fmax(rho_norm, TINY)
 
     # Local vertical at target (geocentric radial direction)
     r_target_norm = ca.norm_2(r_target)
-    n_hat         = r_target / ca.fmax(r_target_norm, _TINY)
+    n_hat         = r_target / ca.fmax(r_target_norm, TINY)
 
     # Elevation angle via arcsin; clamp argument to avoid domain errors
     dot_val     = ca.dot(rho_hat, n_hat)
