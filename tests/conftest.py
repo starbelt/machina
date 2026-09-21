@@ -52,3 +52,22 @@ def _isolated_function_registry():
     state = registry.snapshot()
     yield
     registry.restore(state)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_signal_registry():
+    """
+    The default signal registry is process-global too, and packs declare into it
+    at import time. Packs are imported here first so their declarations are part
+    of the baseline every test restores to: a pack imported for the first time
+    inside a test would otherwise have its signals removed by the restore, and
+    Python's module cache would stop them ever coming back.
+    """
+    if not HAS_CASADI:
+        yield
+        return
+    import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
+    from machina.model import signals
+    state = signals.DEFAULT.snapshot()
+    yield
+    signals.DEFAULT.restore(state)
