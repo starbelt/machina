@@ -1,0 +1,5 @@
+name,value,type,unit,min,max,default,mutability,provenance,source,comment
+COMPUTE_W,30.0,f32,W,0.0,500.0,,design,A,"fixture: illustrative, not a design value",Onboard compute power draw
+DOWNLINK_BPS,100000000.0,f64,1/s,0.0,1000000000.0,,design,E,"fixture: illustrative, not a design value","Crosslink data rate, bits per second"
+N_SATS,4,u8,1,1,32,4,design,A,"fixture: illustrative, not a design value",Satellites in the ring
+REFRESH_S,600.0,f64,s,0.0,3600.0,,fixed,A,"fixture: illustrative, not a design value",Full-disk refresh period

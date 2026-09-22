@@ -1,0 +1,4 @@
+# Tables and manifests are byte-compared (make determinism, machina params check):
+# keep them LF on every checkout, including Windows with core.autocrlf.
+*.csv  text eol=lf
+*.json text eol=lf

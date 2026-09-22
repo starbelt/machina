@@ -19,7 +19,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e .[dev]
-      - run: python -m ruff check src tests examples
+      - run: python -m ruff check src tests examples scripts
       - name: Report nlpsol plugins (bonmin tests skip when it is missing)
         run: python -c "import casadi as ca; print(ca.__version__, {n: ca.has_nlpsol(n) for n in ('ipopt', 'bonmin', 'sqpmethod', 'fatrop')})"
       - run: python -m pytest -rs
+      - name: Params fixture table passes machina params check
+        run: make check-params
+      - name: Two processes build byte-identical artifacts
+        run: make determinism

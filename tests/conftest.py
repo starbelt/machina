@@ -71,3 +71,21 @@ def _isolated_signal_registry():
     state = signals.DEFAULT.snapshot()
     yield
     signals.DEFAULT.restore(state)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_params():
+    """
+    The default param registry is process-global, and the active params
+    contract is module state. Every test starts from the default contract and
+    leaves the registry as it found it.
+    """
+    if not HAS_CASADI:
+        yield
+        return
+    from machina.params import contract, registry
+    state = registry.snapshot()
+    contract.reset()
+    yield
+    contract.reset()
+    registry.restore(state)
