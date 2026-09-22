@@ -208,12 +208,19 @@ class TestTheRigidSignals:
         assert rigid_registry().get("inertia_tensor_body").shape == (3, 3)
 
     def test_importing_machina_does_not_import_the_pack(self):
-        """Decision Log #37: packs are imported explicitly."""
+        """Decision Log #37: packs are imported explicitly. The subprocess gets this
+        tree's src/ first on its path, so it tests this checkout, not an installed copy."""
+        import os
         import subprocess
         import sys
+        from pathlib import Path
+        src = str(Path(__file__).resolve().parents[2] / "src")
+        env = dict(os.environ, PYTHONPATH=src + os.pathsep + os.environ.get("PYTHONPATH", ""))
         out = subprocess.run(
             [sys.executable, "-c",
-             "import sys, machina; print('machina.rigid' in sys.modules, "
+             "import sys, machina; print(machina.__file__); print('machina.rigid' in sys.modules, "
              "'machina.aero' in sys.modules)"],
-            capture_output=True, text=True, check=True)
-        assert out.stdout.split() == ["False", "False"]
+            capture_output=True, text=True, check=True, env=env)
+        where, flags = out.stdout.splitlines()[0], out.stdout.splitlines()[1]
+        assert Path(where).resolve().is_relative_to(Path(src).resolve())
+        assert flags.split() == ["False", "False"]

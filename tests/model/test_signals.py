@@ -59,6 +59,17 @@ class TestRefusals:
         with pytest.raises(SignalError, match="is not SI"):
             fresh().declare("inclination", 1, "deg")
 
+    @pytest.mark.parametrize("unit", ["deg/s", "rpm/s", "ft/s", "lbf*ft", "nmi/hr", "1/min",
+                                      "degC", "kg*ft^2"])
+    def test_a_non_si_symbol_inside_a_compound_unit_is_refused(self, unit):
+        with pytest.raises(SignalError, match="is not SI"):
+            fresh().declare("rate", 1, unit)
+
+    @pytest.mark.parametrize("unit", ["m/s^2", "kg*m^2", "N*m", "rad/s", "1/s", "km",
+                                      "km^3/s^2", "W", "1"])
+    def test_si_and_si_prefixed_units_are_accepted(self, unit):
+        assert fresh().declare("ok", 1, unit).unit == unit
+
     def test_a_malformed_unit_is_refused(self):
         with pytest.raises(SignalError, match="not a well-formed unit"):
             fresh().declare("weird", 1, "kg m")
@@ -156,14 +167,25 @@ class TestIsolation:
         assert list(reg.all()) == ["mass"]
         assert list(reg.frames()) == ["none", "world"]
 
-    def test_restore_is_in_place_so_module_level_aliases_keep_working(self):
+    def test_restore_brings_back_exactly_the_snapshot(self):
+        """A signal declared after the snapshot is gone; one declared before is back."""
         reg = fresh()
-        declare = reg.declare
+        reg.declare("kept", 1, "kg")
         state = reg.snapshot()
-        declare("mass", 1, "kg")
+        reg.declare("added_later", 1, "kg")
         reg.restore(state)
-        declare("mass", 1, "kg")  # would raise "declared twice" if restore rebound the dict
-        assert reg.has("mass")
+        assert not reg.has("added_later")
+        reg.declare("added_later", 1, "kg")          # free again
+        with pytest.raises(SignalError, match="declared twice"):
+            reg.declare("kept", 1, "kg")             # still taken
+
+    def test_a_snapshot_is_not_affected_by_later_declarations(self):
+        reg = fresh()
+        state = reg.snapshot()
+        reg.declare("later", 1, "kg")
+        reg.restore(state)
+        reg.restore(state)
+        assert not reg.has("later")
 
     def test_the_default_registry_is_the_one_the_module_shortcuts_write_to(self):
         assert sig.declare.__self__ is sig.DEFAULT

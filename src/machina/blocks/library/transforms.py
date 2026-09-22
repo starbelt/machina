@@ -241,7 +241,6 @@ def make_stumpff_cs() -> FunctionDescriptor:
     """
     psi = ca.SX.sym('psi')
 
-
     # --- Taylor series (always numerically safe) ---
     C_tay = 0.5 - psi/24 + psi**2/720 - psi**3/40320
     S_tay = 1/6 - psi/120 + psi**2/5040 - psi**3/362880

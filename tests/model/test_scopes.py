@@ -40,6 +40,16 @@ class Separation(Component):
                                  ["pos_a", "pos_b"], ["separation"])}
 
 
+class SpareMass(Component):
+    """Owns a dry_mass of its own and produces nothing."""
+
+    def declare(self):
+        return Declaration(quantities=(Quantity("dry_mass", unit="kg"),))
+
+    def build(self, helpers):
+        return {}
+
+
 def two_vehicles(extra=()):
     return [Scope("a", point_mass()), Scope("b", point_mass()), *extra]
 
@@ -105,6 +115,20 @@ class TestLexicalResolution:
         assert builder.resolved("inner/thruster")["mass"] == "mass"
         assert builder.state_order == ["inner/pos", "inner/vel"]
 
+    def test_lookup_walks_through_intermediate_scopes(self):
+        """fleet/sat/bus reads mass: not in bus, not in sat, found in fleet."""
+        builder = declared([Scope("fleet", [
+            MassSource(),
+            Scope("sat", [Scope("bus", [Kinematics(), Dynamics(), Thruster()])]),
+        ])])
+        assert builder.resolved("fleet/sat/bus/dynamics")["mass"] == "fleet/mass"
+        assert builder.resolved("fleet/sat/bus/thruster")["mass"] == "fleet/mass"
+
+    def test_an_intermediate_producer_wins_over_the_root(self):
+        builder = declared([MassSource(), Scope("sat", [
+            MassSource(), Scope("bus", [Kinematics(), Dynamics(), Thruster()])])])
+        assert builder.resolved("sat/bus/dynamics")["mass"] == "sat/mass"
+
     def test_the_innermost_producer_wins_over_an_outer_one(self):
         builder = declared([MassSource(),
                             Scope("inner", [Kinematics(), Dynamics(), Thruster(), MassSource()])])
@@ -167,11 +191,15 @@ class TestQuantityPaths:
 
     def test_two_owners_of_one_quantity_path_are_refused(self):
         with pytest.raises(ModelError, match="both own a quantity"):
-            declared([Kinematics(), Dynamics(), MassSource(), MassSource("spare"), Thruster()])
+            declared([*point_mass(), SpareMass()])
 
     def test_the_collision_error_suggests_separate_scopes(self):
         with pytest.raises(ModelError, match="separate scopes"):
-            declared([Kinematics(), Dynamics(), MassSource(), MassSource("spare"), Thruster()])
+            declared([*point_mass(), SpareMass()])
+
+    def test_the_same_owner_in_a_separate_scope_is_fine(self):
+        builder = declared([*point_mass(), Scope("spare", [SpareMass()])])
+        assert builder.quantity_order == ["dry_mass", "spare/dry_mass"]
 
     def test_the_same_quantity_in_two_scopes_is_two_quantities(self):
         builder = declared(two_vehicles())

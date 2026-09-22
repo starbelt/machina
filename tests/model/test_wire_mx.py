@@ -220,7 +220,7 @@ class TestTheCompiledProblemSolves:
         np.testing.assert_allclose(result.cost_terms["a/effort"], 0.05625, rtol=1e-5)
         np.testing.assert_allclose(sum(result.cost_terms.values()), result.f_opt, rtol=1e-9)
 
-    def test_a_looser_cap_moves_the_optimum_without_a_rebuild(self):
+    def test_a_tighter_cap_moves_the_optimum_without_a_rebuild(self):
         backend, _ = compile_problem(fleet())
         tight = backend.solve()
         backend.set_parameter("limit", 100.0)

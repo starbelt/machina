@@ -33,7 +33,9 @@ class TestTheGuards:
 
     def test_safe_sqrt_is_finite_and_tiny_at_zero(self):
         x = ca.SX.sym("x")
-        assert evaluate(safe_sqrt(x), x, 0.0) == pytest.approx(1e-16)
+        # abs=0: pytest.approx's default absolute tolerance (1e-12) would accept 0.0,
+        # which is exactly what an unguarded sqrt returns.
+        assert evaluate(safe_sqrt(x), x, 0.0) == pytest.approx(1e-16, rel=1e-9, abs=0)
 
     def test_safe_sqrt_is_the_ordinary_sqrt_away_from_zero(self):
         x = ca.SX.sym("x")
@@ -48,7 +50,7 @@ class TestTheGuards:
 
     def test_safe_norm_is_defined_at_the_origin(self):
         v = ca.SX.sym("v", 3)
-        assert evaluate(safe_norm(v), v, [0.0, 0.0, 0.0]) == pytest.approx(1e-16)
+        assert evaluate(safe_norm(v), v, [0.0, 0.0, 0.0]) == pytest.approx(1e-16, rel=1e-9, abs=0)
 
     def test_safe_norm_is_the_ordinary_norm_elsewhere(self):
         v = ca.SX.sym("v", 3)
@@ -101,9 +103,17 @@ class TestThereIsOnlyOneCopy:
         assert geometry.TINY is TINY
         assert transforms.TINY is TINY and transforms.EPS is EPS
 
-    def test_centralising_it_did_not_move_any_numbers(self):
-        """The Stumpff functions are the sensitive consumer; pin them here."""
+    @pytest.mark.parametrize("psi", [1e-6, -1e-6, 2e-4, 1.0, -1.0, 25.0])
+    def test_centralising_it_did_not_move_any_numbers(self, psi):
+        """The Stumpff functions are the sensitive consumer. psi = +-1e-6 exercises the
+        EPS Taylor branch, the others the closed forms that TINY guards."""
         from machina.blocks import registry
         stumpff = registry.get("transform.stumpff_cs")()
-        c, s = stumpff.function(0.0)
-        np.testing.assert_allclose([float(c), float(s)], [0.5, 1.0 / 6.0], rtol=1e-12)
+        c, s = (float(v) for v in stumpff.function(psi))
+        if psi > 0:
+            root = np.sqrt(psi)
+            want = ((1 - np.cos(root)) / psi, (root - np.sin(root)) / root ** 3)
+        else:
+            root = np.sqrt(-psi)
+            want = ((np.cosh(root) - 1) / -psi, (np.sinh(root) - root) / root ** 3)
+        np.testing.assert_allclose([c, s], want, rtol=1e-9)

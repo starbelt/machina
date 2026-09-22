@@ -51,6 +51,16 @@ class TestTheGraphWorks:
         z = np.array(model["g"]([0, 0, 0, 0], [0.5])).ravel()
         np.testing.assert_allclose(z, [1.0, 0.0, 2.0])
 
+    def test_a_sum_reader_listed_before_its_producers_still_sees_the_whole_sum(self):
+        """Dynamics is written first, but it must run after both producers of force."""
+        builder = declared([Dynamics(), Drag(), Kinematics(), MassSource(), Thruster()])
+        order = builder.order
+        assert order.index("dynamics") > max(order.index("drag"), order.index("thruster"))
+        model = builder.build(fixed={"dry_mass": 2.0})
+        # vel_dot = (force_thrust + force_drag) / mass = ([0.5*2, 0] - 0.5*[2, 4]) / 2
+        xdot = np.array(model["f"]([0, 0, 2.0, 4.0], [0.5])).ravel()
+        np.testing.assert_allclose(xdot[2:], [(1.0 - 1.0) / 2.0, -2.0 / 2.0])
+
     def test_a_sum_signal_adds_every_producer(self):
         builder = declared([*point_mass(), Drag()])
         model = builder.build(fixed={"dry_mass": 2.0})
@@ -212,8 +222,10 @@ class TestWhatTheBuilderRefuses:
                 return {"f": ca.Function("sneaky_f", [vel, mass], [vel * mass],
                                          ["vel", "mass"], ["vel_dot"])}
 
+        # MassSource runs first (no edges, list order), so "mass" IS in the value map when
+        # Sneaky runs: the refusal comes from filtering to declared reads, not from absence.
         with pytest.raises(ModelError, match="does not declare that it reads"):
-            declared([Kinematics(), Sneaky()]).build()
+            declared([MassSource(), Kinematics(), Sneaky()]).build(fixed={"dry_mass": 2.0})
 
     def test_a_wrong_output_count_says_they_are_matched_positionally(self):
         class TooMany(Kinematics):
@@ -231,8 +243,12 @@ class TestWhatTheBuilderRefuses:
             Builder([Kinematics(), Kinematics()], registry=make_registry())
 
     def test_a_distinguishing_suffix_makes_two_instances_legal(self):
-        assert Kinematics("left").name == "kinematics_left"
-        assert Kinematics("right").name == "kinematics_right"
+        """Two drags on one body: both produce the SUM signal force, and it adds."""
+        assert (Drag("left").name, Drag("right").name) == ("drag_left", "drag_right")
+        builder = declared([*point_mass(), Drag("left"), Drag("right")])
+        model = builder.build(fixed={"dry_mass": 2.0})
+        z = np.array(model["g"]([0, 0, 2.0, 4.0], [0.0])).ravel()
+        np.testing.assert_allclose(z[:2], [2 * -0.5 * 2.0, 2 * -0.5 * 4.0])
 
     def test_an_undeclared_signal_names_what_to_do_about_it(self):
         class Typo(Component):
@@ -253,7 +269,7 @@ class TestWhatTheBuilderRefuses:
             def build(self, helpers):
                 raise AssertionError("unreachable")
 
-        with pytest.raises(ModelError, match="either integrated or computed"):
+        with pytest.raises(ModelError, match="never both"):
             declared([Both()])
 
     def test_build_returns_a_dict_of_functions_or_says_so(self):
@@ -300,10 +316,10 @@ class TestLayout:
         assert forward.layout(forward.state_order) == reversed_.layout(reversed_.state_order)
 
     def test_the_layout_follows_the_registry_not_the_declaration_order(self):
-        registry = make_registry()
-        builder = declared(point_mass(), registry)
-        # Dynamics declares vel_dot, Kinematics declares pos_dot; the registry
-        # declares pos before vel, and that is what the vector follows.
+        # Dynamics comes first, so vel is discovered before pos; the registry declares pos
+        # first, and that is what the vector follows. Without the registry sort this is
+        # ["vel", "pos"].
+        builder = declared([Dynamics(), Kinematics(), MassSource(), Thruster()])
         assert builder.state_order == ["pos", "vel"]
 
     def test_every_element_is_accounted_for(self):
@@ -320,14 +336,14 @@ class TestLayout:
 
     def test_the_topological_order_puts_producers_before_consumers(self):
         builder = declared(point_mass())
-        order = [item.path for item in builder._order]
+        order = builder.order
         assert order.index("mass_source") < order.index("thruster")
         assert order.index("thruster") < order.index("dynamics")
 
     def test_the_topological_tie_break_is_the_order_the_caller_wrote(self):
         registry = make_registry()
-        forward = [item.path for item in declared(point_mass(), registry)._order]
-        backward = [item.path for item in declared(list(reversed(point_mass())), registry)._order]
+        forward = declared(point_mass(), registry).order
+        backward = declared(list(reversed(point_mass())), registry).order
         assert forward[0] == "kinematics" and backward[0] == "mass_source"
 
     def test_producers_are_reported_by_instance_path(self):

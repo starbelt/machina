@@ -38,10 +38,16 @@ own scope and nowhere else.
 
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Set
 from dataclasses import dataclass, field
 from enum import Enum
 
+import numpy as np
+
 from machina.model.errors import ModelError
+from machina.units import is_si, is_well_formed
+
+PROVENANCE_CODES = ("D", "P", "E", "A", "M")
 
 __all__ = [
     "Role", "Quantity", "Constraint", "Cost", "Declaration", "Component", "Scope",
@@ -98,6 +104,23 @@ class Quantity:
                 f"quantity {self.name!r}: default_role is the fallback when role is FLEXIBLE, "
                 f"so it cannot itself be FLEXIBLE."
             )
+        what = f"quantity {self.name!r}"
+        _check_unit(self.unit, what)
+        if not isinstance(self.frame, str) or not self.frame.isidentifier():
+            raise ModelError(f"{what}: frame must be a declared frame name, got {self.frame!r}.")
+        if self.provenance is not None and self.provenance not in PROVENANCE_CODES:
+            raise ModelError(
+                f"{what}: provenance {self.provenance!r} is not one of "
+                f"{' '.join(PROVENANCE_CODES)} (documented, physics, estimate, assumption, "
+                f"measured)."
+            )
+        for label in ("source", "param", "doc"):
+            value = getattr(self, label)
+            if value is not None and not isinstance(value, str):
+                raise ModelError(f"{what}: {label} must be a string, got {value!r}.")
+        _check_bounds(self.lb, self.ub, self.size, what)
+        if self.default is not None:
+            _numeric(self.default, self.size, f"{what}: default")
 
     @property
     def size(self) -> int:
@@ -122,6 +145,7 @@ class Constraint:
                 f"constraint {self.name!r}: shape {self.shape} must be a column; the solver "
                 f"stacks constraints into one vector."
             )
+        _check_bounds(self.lb, self.ub, self.size, f"constraint {self.name!r}")
 
     @property
     def size(self) -> int:
@@ -143,6 +167,16 @@ class Cost:
 
     def __post_init__(self):
         _check_identifier(self.name, "cost name")
+        weight = self.weight
+        numeric = isinstance(weight, (int, float)) and not isinstance(weight, bool)
+        symbolic = hasattr(weight, "numel") and hasattr(weight, "is_scalar")
+        if not (numeric or (symbolic and weight.numel() == 1)):
+            raise ModelError(
+                f"cost {self.name!r}: weight must be a number or a scalar CasADi expression "
+                f"(a solver parameter, to sweep it), got {weight!r}."
+            )
+        if numeric and not math.isfinite(weight):
+            raise ModelError(f"cost {self.name!r}: weight {weight!r} is not finite.")
 
 
 @dataclass(frozen=True)
@@ -174,6 +208,8 @@ class Declaration:
     _refs: dict = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
+        for group in _GROUPS:
+            object.__setattr__(self, group, _sequence(getattr(self, group), group))
         refs = {}
         for group in ("states", "algebraic", "inputs"):
             pairs = tuple(_ref(entry, group) for entry in getattr(self, group))
@@ -186,12 +222,18 @@ class Declaration:
                     )
                 refs[local] = reference
         for group in ("helpers", "derivatives", "produces"):
-            names = tuple(getattr(self, group))
-            for name in names:
+            for name in getattr(self, group):
                 _check_identifier(name, f"{group[:-1]} name")
-            object.__setattr__(self, group, names)
-        for group in ("quantities", "constraints", "costs"):
-            object.__setattr__(self, group, tuple(getattr(self, group)))
+            _check_unique(getattr(self, group), group)
+        for group, kind in (("quantities", Quantity), ("constraints", Constraint),
+                            ("costs", Cost)):
+            for item in getattr(self, group):
+                if not isinstance(item, kind):
+                    raise ModelError(
+                        f"{group} must hold {kind.__name__} objects, got {item!r}. "
+                        f"Write {group}=({kind.__name__}('name', ...),)."
+                    )
+            _check_unique([item.name for item in getattr(self, group)], group)
         for quantity in self.quantities:
             if quantity.name in refs:
                 raise ModelError(
@@ -253,6 +295,10 @@ class Component(ABC):
         return f"<{type(self).__name__} {self.name!r}>"
 
 
+_GROUPS = ("states", "algebraic", "inputs", "helpers", "quantities", "derivatives",
+           "produces", "constraints", "costs")
+
+
 @dataclass(frozen=True)
 class Scope:
     """A named subtree. Its members' instance paths are prefixed with its name.
@@ -266,7 +312,8 @@ class Scope:
 
     def __post_init__(self):
         _check_identifier(self.name, "scope name")
-        object.__setattr__(self, "components", tuple(self.components))
+        object.__setattr__(self, "components",
+                           _sequence(self.components, f"scope {self.name!r} components"))
         if not self.components:
             raise ModelError(f"scope {self.name!r} is empty; a scope with nothing in it is a typo.")
 
@@ -283,17 +330,85 @@ def _check_identifier(name, what: str) -> None:
 
 
 def _shape(shape, what: str) -> tuple:
-    if isinstance(shape, int):
+    if isinstance(shape, int) and not isinstance(shape, bool):
         shape = (shape, 1)
-    try:
-        rows, cols = int(shape[0]), int(shape[1])
-    except (TypeError, ValueError, IndexError):
+    ok = (isinstance(shape, (tuple, list)) and len(shape) == 2
+          and all(isinstance(d, int) and not isinstance(d, bool) for d in shape))
+    if not ok:
         raise ModelError(
-            f"{what}: shape must be an int or a (rows, cols) pair, got {shape!r}."
-        ) from None
+            f"{what}: shape must be an int or a (rows, cols) pair of ints, got {shape!r}."
+        )
+    rows, cols = shape
     if rows < 1 or cols < 1:
         raise ModelError(f"{what}: shape {(rows, cols)} must be positive in both dimensions.")
     return (rows, cols)
+
+
+def _sequence(value, group: str) -> tuple:
+    """A declaration group as a tuple, refusing the two silent mistakes.
+
+    A bare string is the missing one-tuple comma -- ``("mass")`` is ``"mass"``
+    -- and would be iterated character by character. A set has no order, and
+    outputs are matched to names by position, so a set would make the model
+    change with ``PYTHONHASHSEED``.
+    """
+    if isinstance(value, str):
+        raise ModelError(
+            f"{group}={value!r} is a string, not a tuple; did you mean ({value!r},)? "
+            f"A one-element tuple needs the trailing comma."
+        )
+    if isinstance(value, (Set, dict)):
+        raise ModelError(
+            f"{group} is a {type(value).__name__}. Its order would change from process to "
+            f"process, and outputs are matched positionally -- pass a tuple or list in the "
+            f"order build() returns them."
+        )
+    if not isinstance(value, (tuple, list)):
+        raise ModelError(f"{group} must be a tuple or list, got {type(value).__name__}.")
+    return tuple(value)
+
+
+def _check_unique(names, group: str) -> None:
+    seen = []
+    for name in names:
+        if name in seen:
+            raise ModelError(f"{group} lists {name!r} twice.")
+        seen.append(name)
+
+
+def _check_unit(unit, what: str) -> None:
+    if not isinstance(unit, str) or not unit:
+        raise ModelError(f'{what}: unit is mandatory; use "1" for dimensionless.')
+    if not is_well_formed(unit):
+        raise ModelError(f"{what}: unit {unit!r} is not a well-formed unit string.")
+    if not is_si(unit):
+        raise ModelError(
+            f"{what}: unit {unit!r} is not SI. Convert at the boundary that produced the "
+            f"number; display units belong in plot labels. See machina/units.py."
+        )
+
+
+def _numeric(value, size: int, what: str) -> np.ndarray:
+    """A number or ``size`` numbers, as a flat float array. NaN, strings and bools refused."""
+    flat = value if isinstance(value, (list, tuple)) else [value]
+    if any(isinstance(v, (str, bytes, bool)) for v in flat):
+        raise ModelError(f"{what} must be numeric, got {value!r}.")
+    try:
+        array = np.asarray(value, dtype=float).ravel(order="F")
+    except (TypeError, ValueError):
+        raise ModelError(f"{what} must be numeric, got {value!r}.") from None
+    if array.size not in (1, size):
+        raise ModelError(f"{what} has {array.size} elements; expected 1 or {size}.")
+    if np.any(np.isnan(array)):
+        raise ModelError(f"{what} contains NaN.")
+    return array
+
+
+def _check_bounds(lb, ub, size: int, what: str) -> None:
+    lo = _numeric(lb, size, f"{what}: lb")
+    hi = _numeric(ub, size, f"{what}: ub")
+    if np.any(lo > hi):
+        raise ModelError(f"{what}: lb {lb!r} exceeds ub {ub!r}.")
 
 
 def _ref(entry, group: str) -> tuple:
@@ -311,6 +426,13 @@ def _ref(entry, group: str) -> tuple:
     _check_identifier(local, f"{group} local name")
     if not isinstance(reference, str) or not reference:
         raise ModelError(f"{group} entry {entry!r}: the reference must be a non-empty string.")
+    segments = (reference[1:] if reference.startswith("/") else reference).split("/")
+    if not all(segment.isidentifier() for segment in segments):
+        raise ModelError(
+            f"{group} entry {entry!r}: {reference!r} is not a valid reference. Write a signal "
+            f"name, a scoped path such as 'sat_a/r_eci', or an absolute path such as "
+            f"'/sat_a/r_eci' -- no empty segments and no trailing '/'."
+        )
     return (local, reference)
 
 

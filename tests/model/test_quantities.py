@@ -209,7 +209,25 @@ class TestRoles:
         assert quantity.role is Role.PARAMETER
 
     def test_the_builder_does_not_interpret_roles(self):
-        """Roles are the compiler's business; the builder only lays quantities out."""
-        builder = declared(point_mass())
-        assert builder.quantity_order == ["dry_mass"]
-        assert builder.build()["f"].name_in() == ["x", "u", "q"]
+        """Roles are the compiler's business: every role is laid out the same way."""
+        class Mixed(Component):
+            def declare(self):
+                return Declaration(
+                    quantities=tuple(Quantity(f"q_{role.value}", role=role)
+                                     for role in (Role.FLEXIBLE, Role.VARIABLE,
+                                                  Role.PARAMETER, Role.DISCRETE, Role.FIXED)),
+                    produces=("mass",))
+
+            def build(self, helpers):
+                qs = [ca.SX.sym(f"q_{role}") for role in
+                      ("flexible", "variable", "parameter", "discrete", "fixed")]
+                return {"g": ca.Function("mixed_g", qs, [sum(qs[1:], qs[0])],
+                                         [f"q_{r}" for r in ("flexible", "variable", "parameter",
+                                                             "discrete", "fixed")], ["mass"])}
+
+        builder = declared([Mixed()])
+        assert builder.quantity_order == ["q_flexible", "q_variable", "q_parameter",
+                                          "q_discrete", "q_fixed"]
+        model = builder.build()
+        assert model["g"].name_in() == ["x", "u", "q"] and builder.nq == 5
+        np.testing.assert_allclose(float(model["g"]([], [], [1, 2, 3, 4, 5])), 15.0)
