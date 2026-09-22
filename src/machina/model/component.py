@@ -37,11 +37,13 @@ own scope and nowhere else.
 """
 
 import math
+import numbers
 from abc import ABC, abstractmethod
 from collections.abc import Set
 from dataclasses import dataclass, field
 from enum import Enum
 
+import casadi as ca
 import numpy as np
 
 from machina.model.errors import ModelError
@@ -118,9 +120,9 @@ class Quantity:
             value = getattr(self, label)
             if value is not None and not isinstance(value, str):
                 raise ModelError(f"{what}: {label} must be a string, got {value!r}.")
-        _check_bounds(self.lb, self.ub, self.size, what)
+        _check_bounds(self.lb, self.ub, self.shape, what)
         if self.default is not None:
-            _numeric(self.default, self.size, f"{what}: default")
+            numeric(self.default, self.shape, f"{what}: default")
 
     @property
     def size(self) -> int:
@@ -145,7 +147,7 @@ class Constraint:
                 f"constraint {self.name!r}: shape {self.shape} must be a column; the solver "
                 f"stacks constraints into one vector."
             )
-        _check_bounds(self.lb, self.ub, self.size, f"constraint {self.name!r}")
+        _check_bounds(self.lb, self.ub, self.shape, f"constraint {self.name!r}")
 
     @property
     def size(self) -> int:
@@ -168,14 +170,29 @@ class Cost:
     def __post_init__(self):
         _check_identifier(self.name, "cost name")
         weight = self.weight
-        numeric = isinstance(weight, (int, float)) and not isinstance(weight, bool)
-        symbolic = hasattr(weight, "numel") and hasattr(weight, "is_scalar")
-        if not (numeric or (symbolic and weight.numel() == 1)):
+        if isinstance(weight, (ca.SX, ca.MX)):
+            if weight.numel() != 1:
+                raise ModelError(
+                    f"cost {self.name!r}: a symbolic weight must be scalar, got shape "
+                    f"{weight.shape}."
+                )
+            return
+        # A number, or anything holding exactly one number (a DM, a 0-d array).
+        if isinstance(weight, (bool, np.bool_, str, bytes, list, tuple)) or weight is None:
+            value = None
+        else:
+            try:
+                array = np.asarray(weight.full() if isinstance(weight, ca.DM) else weight,
+                                   dtype=float)
+                value = float(array.reshape(-1)[0]) if array.size == 1 else None
+            except (TypeError, ValueError):
+                value = None
+        if value is None:
             raise ModelError(
                 f"cost {self.name!r}: weight must be a number or a scalar CasADi expression "
                 f"(a solver parameter, to sweep it), got {weight!r}."
             )
-        if numeric and not math.isfinite(weight):
+        if not math.isfinite(value):
             raise ModelError(f"cost {self.name!r}: weight {weight!r} is not finite.")
 
 
@@ -329,16 +346,21 @@ def _check_identifier(name, what: str) -> None:
         )
 
 
+def _is_integer(value) -> bool:
+    """An int or numpy integer, but not a bool."""
+    return isinstance(value, numbers.Integral) and not isinstance(value, (bool, np.bool_))
+
+
 def _shape(shape, what: str) -> tuple:
-    if isinstance(shape, int) and not isinstance(shape, bool):
+    if _is_integer(shape):
         shape = (shape, 1)
     ok = (isinstance(shape, (tuple, list)) and len(shape) == 2
-          and all(isinstance(d, int) and not isinstance(d, bool) for d in shape))
+          and all(_is_integer(d) for d in shape))
     if not ok:
         raise ModelError(
             f"{what}: shape must be an int or a (rows, cols) pair of ints, got {shape!r}."
         )
-    rows, cols = shape
+    rows, cols = int(shape[0]), int(shape[1])
     if rows < 1 or cols < 1:
         raise ModelError(f"{what}: shape {(rows, cols)} must be positive in both dimensions.")
     return (rows, cols)
@@ -388,25 +410,49 @@ def _check_unit(unit, what: str) -> None:
         )
 
 
-def _numeric(value, size: int, what: str) -> np.ndarray:
-    """A number or ``size`` numbers, as a flat float array. NaN, strings and bools refused."""
-    flat = value if isinstance(value, (list, tuple)) else [value]
-    if any(isinstance(v, (str, bytes, bool)) for v in flat):
+def numeric(value, shape: tuple, what: str, *, finite: bool = False) -> np.ndarray:
+    """``value`` as a flat column-major float array, under the solver backend's rule.
+
+    A scalar broadcasts; an array of the declared shape is read column-major;
+    a 1-D array of the right length is taken as already column-major; a row
+    given for a column vector (or the reverse) is accepted. Anything else --
+    and strings, booleans and NaN -- is refused here, at the declaration,
+    rather than at compile time with a message naming a solver variable.
+    """
+    shape = tuple(shape)
+    numel = shape[0] * shape[1]
+    items = value if isinstance(value, (list, tuple)) else [value]
+    if any(isinstance(v, (str, bytes, bool, np.bool_)) for v in items):
         raise ModelError(f"{what} must be numeric, got {value!r}.")
     try:
-        array = np.asarray(value, dtype=float).ravel(order="F")
+        array = np.asarray(value.full() if isinstance(value, ca.DM) else value, dtype=float)
     except (TypeError, ValueError):
         raise ModelError(f"{what} must be numeric, got {value!r}.") from None
-    if array.size not in (1, size):
-        raise ModelError(f"{what} has {array.size} elements; expected 1 or {size}.")
-    if np.any(np.isnan(array)):
+    if array.dtype == bool:
+        raise ModelError(f"{what} must be numeric, got {value!r}.")
+    if array.ndim == 0:
+        flat = np.full(numel, float(array))
+    elif array.ndim == 1 and array.size == numel:
+        flat = array.copy()
+    elif array.ndim == 2 and array.shape == shape:
+        flat = array.ravel(order="F")
+    elif array.ndim == 2 and 1 in shape and 1 in array.shape and array.size == numel:
+        flat = array.ravel()
+    else:
+        raise ModelError(
+            f"{what} has shape {array.shape}; expected a scalar, an array of shape {shape}, "
+            f"or a flat column-major array of length {numel}."
+        )
+    if np.any(np.isnan(flat)):
         raise ModelError(f"{what} contains NaN.")
-    return array
+    if finite and not np.all(np.isfinite(flat)):
+        raise ModelError(f"{what} is not finite.")
+    return flat
 
 
-def _check_bounds(lb, ub, size: int, what: str) -> None:
-    lo = _numeric(lb, size, f"{what}: lb")
-    hi = _numeric(ub, size, f"{what}: ub")
+def _check_bounds(lb, ub, shape: tuple, what: str) -> None:
+    lo = numeric(lb, shape, f"{what}: lb")
+    hi = numeric(ub, shape, f"{what}: ub")
     if np.any(lo > hi):
         raise ModelError(f"{what}: lb {lb!r} exceeds ub {ub!r}.")
 

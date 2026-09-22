@@ -109,7 +109,7 @@ class TestQuantity:
             Quantity("v", shape=2, lb=[0.0, 3.0], ub=[1.0, 2.0])
 
     def test_bounds_of_the_wrong_length_are_refused(self):
-        with pytest.raises(ModelError, match="has 2 elements; expected 1 or 3"):
+        with pytest.raises(ModelError, match=r"lb has shape \(2,\); expected a scalar, an array of shape \(3, 1\)"):
             Quantity("v", shape=3, lb=[0.0, 0.0])
 
     def test_a_non_numeric_bound_is_refused(self):
@@ -125,7 +125,7 @@ class TestQuantity:
             Quantity("a", lb=math.nan)
 
     def test_a_default_of_the_wrong_size_is_refused(self):
-        with pytest.raises(ModelError, match="default has 2 elements; expected 1 or 3"):
+        with pytest.raises(ModelError, match=r"default has shape \(2,\)"):
             Quantity("a", shape=3, default=[1.0, 2.0])
 
     def test_a_matrix_default_of_the_right_size_is_accepted(self):
@@ -143,7 +143,13 @@ class TestQuantity:
         with pytest.raises(ModelError, match="frame must be a declared frame name"):
             Quantity("r", frame="earth centred")
 
-    @pytest.mark.parametrize("shape", [(3, 1, 1), (2.0, 1), (0, 1), "3", True])
+    def test_numpy_integer_dimensions_are_accepted_and_stored_as_int(self):
+        """A shape computed with numpy (len of an array, an np.int64) is still a shape."""
+        quantity = Quantity("a", shape=(np.int64(3), np.int32(1)))
+        assert quantity.shape == (3, 1) and all(type(d) is int for d in quantity.shape)
+        assert Quantity("b", shape=np.int64(2)).shape == (2, 1)
+
+    @pytest.mark.parametrize("shape", [(3, 1, 1), (2.0, 1), (0, 1), "3", True, (np.bool_(True), 1)])
     def test_a_malformed_shape_is_refused(self, shape):
         with pytest.raises(ModelError, match="shape"):
             Quantity("a", shape=shape)
@@ -175,7 +181,7 @@ class TestConstraint:
             Constraint("c", shape=(2, 2))
 
     def test_vector_bounds_must_match_the_shape(self):
-        with pytest.raises(ModelError, match="expected 1 or 3"):
+        with pytest.raises(ModelError, match=r"has shape \(2,\)"):
             Constraint("c", shape=3, lb=[0.0, 0.0])
 
 
@@ -188,6 +194,14 @@ class TestCost:
 
     def test_a_numeric_weight_is_accepted(self):
         assert Cost("j", weight=2).weight == 2
+
+    @pytest.mark.parametrize("weight", [np.float32(0.5), np.float64(0.5), np.int64(2)])
+    def test_numpy_scalar_weights_are_accepted(self, weight):
+        assert Cost("j", weight=weight).weight == weight
+
+    def test_a_numpy_bool_weight_is_refused(self):
+        with pytest.raises(ModelError, match="weight"):
+            Cost("j", weight=np.bool_(True))
 
     def test_a_scalar_casadi_weight_is_accepted_so_it_can_be_swept(self):
         weight = ca.MX.sym("w")

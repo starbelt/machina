@@ -61,7 +61,7 @@ import casadi as ca
 import numpy as np
 
 from machina.model import signals as sig
-from machina.model.component import Component, Scope, _sequence
+from machina.model.component import Component, Scope, _sequence, numeric
 from machina.model.errors import ModelError, SignalError
 
 __all__ = [
@@ -337,13 +337,16 @@ class Builder:
 
     def _resolve_algebraic(self, item: Placed, local: str, reference: str) -> str:
         candidates = self._candidates(item, local, "algebraic", reference)
-        for path in candidates:
+        for index, path in enumerate(candidates):
             if path in self._computed_by:
                 if item.path in self._computed_by[path]:
+                    outer = [c for c in candidates[index + 1:] if self._producer_of(c)]
+                    hint = (f" To read the enclosing scope's value and pass it on, reference "
+                            f"it absolutely: ('{local}', '/{outer[0]}')." if outer else
+                            " Compute the value inside build() instead of reading it back.")
                     raise ModelError(
                         f"{item.path} reads {reference!r} and also produces {path!r}: an "
-                        f"algebraic loop through one component. Compute the value inside "
-                        f"build() instead of reading it back."
+                        f"algebraic loop through one component.{hint}"
                     )
                 return path
             if path in self._integrated_by:
@@ -352,25 +355,43 @@ class Builder:
                     f"integrated by {self._integrated_by[path]}. List it under states."
                 )
         if "/" in reference:
+            leaf = _leaf(reference)
+            elsewhere = [p for p in list(self._computed_by) + list(self._integrated_by)
+                         if _leaf(p) == leaf]
+            hint = (f" {leaf!r} is produced at {elsewhere}; reference one of those, e.g. "
+                    f"'/{elsewhere[0]}'." if elsewhere else f" Nothing produces {leaf!r} anywhere.")
             raise ModelError(
                 f"{item.path}: algebraic entry {local!r} -> {reference!r} names a path nothing "
-                f"produces. An explicit path names one instance, so there is no zero to fall "
-                f"back on -- check the spelling, or read the signal by its bare name."
+                f"produces, and an explicit path names one instance, so there is no zero to "
+                f"fall back on.{hint}"
             )
         return candidates[0]
 
     def _resolve_input(self, item: Placed, local: str, reference: str) -> str:
+        """An input is produced by nobody, so there is no producer to search for.
+
+        A bare name is the component's own input, and is refused if the name is
+        produced in the own scope or any enclosing one -- that is almost always a
+        signal listed under the wrong group. A scoped reference ('a/u') binds to
+        the innermost candidate whose scope exists; an absolute one ('/a/u') is
+        exactly that path. Either way only the bound path is checked.
+        """
         candidates = self._candidates(item, local, "inputs", reference)
-        for path in candidates:
-            producer = self._producer_of(path)
+        if "/" in reference:
+            path = next(c for c in candidates if _scope_of(c) in self._scopes)
+            checked = [path]
+        else:
+            path, checked = candidates[0], candidates
+        for candidate in checked:
+            producer = self._producer_of(candidate)
             if producer:
-                group = "states" if path in self._integrated_by else "algebraic"
+                group = "states" if candidate in self._integrated_by else "algebraic"
                 raise ModelError(
-                    f"{item.path} lists {reference!r} under inputs, but {path!r} is produced by "
-                    f"{producer}. An input is exogenous -- nothing in the model produces it. "
-                    f"List it under {group}, or give the input its own signal name."
+                    f"{item.path} lists {reference!r} under inputs, but {candidate!r} is "
+                    f"produced by {producer}. An input is exogenous -- nothing in the model "
+                    f"produces it. List it under {group}, or give the input its own signal name."
                 )
-        return candidates[0]
+        return path
 
     def _check_paths(self) -> None:
         """Cross-component path rules: one role per path, unique declared outputs."""
@@ -393,6 +414,8 @@ class Builder:
             for group, _ in uses:
                 if group not in groups:
                     groups.append(group)
+            if groups == ["algebraic"] and path not in self._computed_by:
+                self._refuse_input_shadow(path, uses, consumed_as)
             if "inputs" in groups and len(groups) > 1:
                 readers = [f"{reader} ({group})" for group, reader in uses]
                 raise ModelError(
@@ -411,6 +434,29 @@ class Builder:
                             f"{label.capitalize()} names are unique per scope -- rename one."
                         )
                     seen[path] = item.path
+
+    def _refuse_input_shadow(self, path: str, uses: list, consumed_as: dict) -> None:
+        """An unproduced signal read beside an input of the same name is a silent zero.
+
+        Inside one scope that is the one-role error; one scope down it would
+        otherwise read as zero (SUM) or claim a missing producer (UNIQUE)
+        while the value the author meant sits in an enclosing input.
+        """
+        leaf, walk = _leaf(path), _scope_of(path)
+        while walk:
+            walk = walk.rpartition("/")[0]
+            outer = _join(walk, leaf)
+            readers = [reader for group, reader in consumed_as.get(outer, [])
+                       if group == "inputs"]
+            if readers:
+                raise ModelError(
+                    f"{uses[0][1]} reads {leaf!r} as a signal and nothing produces {path!r}, "
+                    f"but {outer!r} is an input (read by {readers}). The signal would silently "
+                    f"read zero or fail as unproduced. To read the input, list it under inputs "
+                    f"as ('{leaf}', '/{outer}')."
+                )
+            if not walk:
+                break
 
     def _lay_out(self) -> None:
         """Order by ``(registry index, scope index)``, per the vault design.
@@ -539,7 +585,7 @@ class Builder:
                     f"{want}. Pass a value of the declared shape; nothing is broadcast."
                 )
 
-        values = {p: leaves[p] for p in expected}
+        values = {p: _as_casadi(leaves[p]) for p in expected}
         for path in self.unproduced_sums:
             values[path] = ca.DM.zeros(*self.registry.get(_leaf(path)).shape)
 
@@ -615,6 +661,13 @@ class Builder:
                     f"rename the argument -- they are matched by name, not position."
                 )
             takes = (fn.size1_in(i), fn.size2_in(i))
+            if not fn.sparsity_in(i).is_dense():
+                raise ModelError(
+                    f"{item.path}: {fn.name()} takes {key!r} with a sparse pattern "
+                    f"({fn.sparsity_in(i).nnz()} of {takes[0] * takes[1]} entries). CasADi "
+                    f"would silently drop the other entries of the value bound to it. Take a "
+                    f"dense ca.SX.sym and build the sparse structure inside the Function."
+                )
             if takes != tuple(shapes[key]):
                 raise ModelError(
                     f"{item.path}: {fn.name()} takes {key!r} as {takes}, but it is declared "
@@ -697,17 +750,15 @@ class Builder:
         return out
 
     def _fixed_value(self, path: str, value):
+        """The Quantity rule, plus: finite, and no broadcasting of a scalar into a vector."""
         shape = self._shape(path)
-        try:
-            array = np.asarray(value, dtype=float)
-        except (TypeError, ValueError):
-            raise ModelError(f"fixed[{path!r}] must be numeric, got {value!r}.") from None
-        if array.size != shape[0] * shape[1] or (array.ndim == 2 and array.shape != shape):
+        if np.ndim(value) == 0 and shape != (1, 1) and not isinstance(value, ca.DM):
             raise ModelError(
-                f"fixed[{path!r}] has shape {array.shape}, but {path!r} is declared {shape}. "
-                f"Pass exactly that many values; nothing is broadcast."
+                f"fixed[{path!r}] is a scalar, but {path!r} is declared {shape}. Pass "
+                f"{shape[0] * shape[1]} values; nothing is broadcast."
             )
-        return ca.reshape(ca.DM(array.ravel(order="F")), shape[0], shape[1])
+        flat = numeric(value, shape, f"fixed[{path!r}]", finite=True)
+        return ca.reshape(ca.DM(flat), shape[0], shape[1])
 
     # --- introspection --------------------------------------------------------------------
 
@@ -838,6 +889,14 @@ def _shape_of(value) -> tuple:
     if array.ndim == 1:
         return (array.shape[0], 1)
     return tuple(array.shape)
+
+
+def _as_casadi(value):
+    """CasADi values pass through; numbers, lists and arrays become a DM of their shape."""
+    if isinstance(value, (ca.SX, ca.MX, ca.DM)):
+        return value
+    array = np.asarray(value, dtype=float)
+    return ca.DM(array.reshape(-1, 1) if array.ndim == 1 else array)
 
 
 def _check_keys(component_path: str, built, dec) -> None:

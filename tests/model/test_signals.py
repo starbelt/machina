@@ -60,13 +60,15 @@ class TestRefusals:
             fresh().declare("inclination", 1, "deg")
 
     @pytest.mark.parametrize("unit", ["deg/s", "rpm/s", "ft/s", "lbf*ft", "nmi/hr", "1/min",
-                                      "degC", "kg*ft^2"])
+                                      "degC", "kg*ft^2", "RPM", "Deg", "hrs", "kWh", "mAh",
+                                      "AU", "rev/s", "psia", "gal", "h", "C", "F"])
     def test_a_non_si_symbol_inside_a_compound_unit_is_refused(self, unit):
         with pytest.raises(SignalError, match="is not SI"):
             fresh().declare("rate", 1, unit)
 
     @pytest.mark.parametrize("unit", ["m/s^2", "kg*m^2", "N*m", "rad/s", "1/s", "km",
-                                      "km^3/s^2", "W", "1"])
+                                      "km^3/s^2", "W", "1", "s^-1", "W/(m^2*K)", "J/(kg*K)",
+                                      "Pa*s", "N*m/rad", "hPa", "GHz", "mm"])
     def test_si_and_si_prefixed_units_are_accepted(self, unit):
         assert fresh().declare("ok", 1, unit).unit == unit
 
