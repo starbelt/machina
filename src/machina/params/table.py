@@ -91,6 +91,11 @@ def dumps(rows: list) -> str:
 
 def loads(text: str) -> list:
     header = columns()
+    if text.startswith("\ufeff"):
+        raise ValueError(
+            "the file starts with a UTF-8 byte-order mark, which Excel's 'CSV UTF-8' save "
+            "adds. Save it as plain CSV (or run `machina params sync` to re-emit it)."
+        )
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return []
@@ -108,8 +113,12 @@ def loads(text: str) -> list:
 
 
 def read(path: Path) -> list:
+    """The rows of a table. Bytes are decoded as ``check`` decodes them: CRLF line ends
+    are read as LF, and a lone CR inside a field is kept rather than translated."""
     path = Path(path)
-    return loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    if not path.exists():
+        return []
+    return loads(path.read_bytes().decode("utf-8").replace("\r\n", "\n"))
 
 
 def write(path: Path, rows: list) -> None:

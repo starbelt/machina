@@ -35,13 +35,8 @@ def _load_contract(spec: str):
 
 
 def _prepare(args):
-    from machina.params import contract, modules
+    from machina.params import modules
 
-    cwd = os.getcwd()
-    if cwd not in sys.path:
-        sys.path.insert(0, cwd)
-    if args.contract:
-        contract.use(_load_contract(args.contract))
     return modules.load_all(modules.parse_module_list(args.modules))
 
 
@@ -108,8 +103,28 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    """Run one command. The active params contract is restored afterwards, so calling
+    ``main()`` twice in one process (a test, a notebook) does not leak state."""
+    from machina.params import contract
+
+    # Redirected output on Windows is cp1252; a stray non-ASCII doc must not crash the gate.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     args = _parser().parse_args(argv)
-    return args.handler(args)
+    # Declaring modules and contracts import from the consumer's repository root, as
+    # `python -m` would allow; a console script does not put the working directory on the path.
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+    try:
+        if args.contract:
+            with contract.using(_load_contract(args.contract)):
+                return args.handler(args)
+        return args.handler(args)
+    except ValueError as exc:
+        print(f"error: {args.csv}: {exc}")
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

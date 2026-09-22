@@ -91,10 +91,12 @@ class TestArguments:
         with pytest.raises(ImportError, match="failed to import"):
             run("params", "sync", "--csv", str(csv), "--modules", "no_such_module_here")
 
-    def test_an_empty_module_list_is_refused(self, tmp_path, monkeypatch):
+    def test_an_empty_module_list_is_refused_naming_the_file(self, tmp_path, monkeypatch,
+                                                             capsys):
         csv = project(tmp_path, monkeypatch, "decl_args_b")
-        with pytest.raises(ValueError, match="no declaring modules"):
-            run("params", "sync", "--csv", str(csv), "--modules", " , ")
+        assert run("params", "sync", "--csv", str(csv), "--modules", " , ") == 1
+        out = capsys.readouterr().out
+        assert "no declaring modules" in out and str(csv) in out
 
     def test_csv_and_modules_are_required(self):
         with pytest.raises(SystemExit):

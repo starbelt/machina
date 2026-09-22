@@ -16,7 +16,7 @@ that silently skipped one would fall back to a default nobody chose.
 from dataclasses import dataclass
 from pathlib import Path
 
-from machina.params import table
+from machina.params import contract, table
 
 __all__ = ["ParamValue", "values_from"]
 
@@ -52,6 +52,14 @@ def values_from(csv_path: Path, *, allow_unfilled: bool = False) -> dict:
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"{csv_path} does not exist -- run `machina params sync`.")
+    text = csv_path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    problems = [str(i) for i in contract.get().lint_text(text, allow_unfilled=True)
+                if not i.warning]
+    if problems:
+        raise ValueError(
+            f"{csv_path} is not a valid params table; run `machina params check` for the full "
+            f"report. First problems: {problems[:3]}"
+        )
     rows = table.read(csv_path)
     blank = [r["name"] for r in rows if not r["value"]]
     if blank and not allow_unfilled:

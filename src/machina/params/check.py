@@ -36,10 +36,9 @@ def check(csv_path: Path, decls: dict, *, allow_unfilled: bool = False) -> tuple
     text = csv_path.read_bytes().decode("utf-8")
     try:
         rows = table.loads(text.replace("\r\n", "\n"))
+        errors = sync.plan(decls, rows).render()
     except ValueError as exc:
         return ([f"  {exc}"], [])
-
-    errors = sync.plan(decls, rows).render()
 
     # Canonical form, checked by re-emitting. Catches what the row-level diff cannot see:
     # quoting style, a stray trailing newline, CRLF line ends, float spelling.

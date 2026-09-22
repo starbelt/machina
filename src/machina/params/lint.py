@@ -36,6 +36,11 @@ from machina.units import NON_SI_UNITS, UNIT_RE, is_si, is_well_formed
 
 __all__ = ["DefaultContract", "INT_RANGES", "PROVENANCE_MEANINGS"]
 
+# What any reader of a CSV -- strtod, a spreadsheet, another language -- parses the same way.
+# Python's float() also accepts "1_0", surrounding spaces and non-ASCII digits; nothing else does.
+_DECIMAL = re.compile(r"[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?")
+_INFINITE = re.compile(r"[-+]?inf")
+
 INT_RANGES = {
     "i8": (-2 ** 7, 2 ** 7 - 1), "i16": (-2 ** 15, 2 ** 15 - 1), "i32": (-2 ** 31, 2 ** 31 - 1),
     "u8": (0, 2 ** 8 - 1), "u16": (0, 2 ** 16 - 1), "u32": (0, 2 ** 32 - 1),
@@ -164,6 +169,16 @@ class DefaultContract:
     # --- helpers ----------------------------------------------------------------------------
 
     def _number(self, text, column, kind, fail, *, allow_infinite=False):
+        if text.strip().lower().lstrip("+-") == "nan":
+            fail(f"{column} is NaN")
+            return None
+        if _INFINITE.fullmatch(text) and not allow_infinite:
+            fail(f"{column} {text!r} is infinite")
+            return None
+        if not (_DECIMAL.fullmatch(text) or (allow_infinite and _INFINITE.fullmatch(text))):
+            fail(f"{column} {text!r} is not a number in plain decimal form (digits, one '.', "
+                 f"optional exponent; no spaces, underscores or non-ASCII digits)")
+            return None
         try:
             value = float(text)
         except ValueError:

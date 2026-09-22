@@ -30,7 +30,8 @@ __all__ = ["dense", "generate_c", "sha256_of", "layout_block", "schema_hash"]
 
 def dense(f: ca.Function, name: str = None) -> ca.Function:
     """The same Function, optionally renamed, with every output dense."""
-    args = [ca.SX.sym(f.name_in(i), f.size1_in(i), f.size2_in(i)) for i in range(f.n_in())]
+    sym = ca.MX.sym if f.is_a("MXFunction") else ca.SX.sym   # MX-only nodes (solve, rootfinder)
+    args = [sym(f.name_in(i), f.size1_in(i), f.size2_in(i)) for i in range(f.n_in())]
     outs = list(f.call(args))
     return ca.Function(name or f.name(), args, [ca.densify(o) for o in outs],
                        [f.name_in(i) for i in range(f.n_in())],

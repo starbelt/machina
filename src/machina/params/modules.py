@@ -41,7 +41,11 @@ def load_all(modules, *, registry=None) -> dict:
                 f"declaring module {name!r} failed to import ({exc}). Fix it rather than drop "
                 f"it from the list: a missing module makes its rows look orphaned."
             ) from exc
-    return (DEFAULT if registry is None else registry).all()
+    listed = set(modules)
+    # Only what the listed modules declared: the registry is process-global, and a second
+    # call in the same process would otherwise see the first call's declarations too.
+    return {name: decl for name, decl in (DEFAULT if registry is None else registry).all().items()
+            if decl.declared_in in listed}
 
 
 def parse_module_list(text: str) -> list:

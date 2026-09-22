@@ -67,8 +67,28 @@ def _human(row) -> dict:
     return {c: row.get(c, "") for c in table.human_owned()}
 
 
+def _unique(rows: list) -> dict:
+    """``{name: row}``, refusing a table that lists a name twice.
+
+    Keeping the last duplicate would silently discard the other row's value,
+    provenance and source -- and a merge-conflict resolution that keeps both
+    sides produces exactly that table.
+    """
+    by_name, repeated = {}, []
+    for row in rows:
+        if row["name"] in by_name and row["name"] not in repeated:
+            repeated.append(row["name"])
+        by_name.setdefault(row["name"], row)
+    if repeated:
+        raise ValueError(
+            f"the table lists {repeated} more than once. Keep one row for each by hand -- "
+            f"sync will not guess which value, provenance and source are the right ones."
+        )
+    return by_name
+
+
 def plan(decls: dict, rows: list) -> Diff:
-    by_name = {r["name"]: r for r in rows}
+    by_name = _unique(rows)
     diff = Diff()
     for name, decl in decls.items():
         row = by_name.get(name)
@@ -87,7 +107,7 @@ def plan(decls: dict, rows: list) -> Diff:
 
 def apply(decls: dict, rows: list, *, prune: bool = False) -> list:
     """The rows ``sync`` would write. Pure, so ``check`` can compare without a tempfile."""
-    by_name = {r["name"]: r for r in rows}
+    by_name = _unique(rows)
     out = []
     for name, decl in decls.items():
         old = by_name.get(name)
