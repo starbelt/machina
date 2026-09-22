@@ -27,6 +27,9 @@ dev = [
     "pandas>=2.0",
 ]
 
+[project.scripts]
+machina = "machina.cli:main"
+
 [project.urls]
 Repository = "https://github.com/starbelt/machina"
 
@@ -46,7 +49,7 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-src = ["src", "tests", "examples"]
+src = ["src", "tests", "examples", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
