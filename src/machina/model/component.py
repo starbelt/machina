@@ -77,6 +77,12 @@ class Quantity:
     ``param`` links the quantity to a :mod:`machina.params` declaration by
     name, so its value, bounds and documentation can come from the params CSV
     with provenance attached.
+
+    ``scale`` is the quantity's nominal magnitude. The compiler passes it to
+    ``SolverBackend.add_variable(scale=)``, so the solver sees ``x / scale``
+    while every caller stays in physical units (vault: Solver Backend,
+    Decision Log #53). It is a scalar or an array of the declared shape,
+    strictly positive; the default ``1.0`` means unscaled.
     """
 
     name: str
@@ -89,6 +95,7 @@ class Quantity:
     lb: object = -math.inf
     ub: object = math.inf
     frame: str = "none"
+    scale: object = 1.0
     provenance: str = None
     source: str = None
     param: str = None
@@ -121,6 +128,7 @@ class Quantity:
             if value is not None and not isinstance(value, str):
                 raise ModelError(f"{what}: {label} must be a string, got {value!r}.")
         _check_bounds(self.lb, self.ub, self.shape, what)
+        _check_scale(self.scale, self.shape, what)
         if self.default is not None:
             numeric(self.default, self.shape, f"{what}: default")
 
@@ -131,12 +139,20 @@ class Quantity:
 
 @dataclass(frozen=True)
 class Constraint:
-    """A declared ``h`` output. Bounds are in the component's own units."""
+    """A declared ``h`` output. Bounds are in the component's own units.
+
+    ``scale`` is the nominal magnitude of the constraint rows. The compiler
+    passes it to ``SolverBackend.add_constraint(scale=)``, so the solver sees
+    ``g / scale`` while every caller stays in physical units (vault: Solver
+    Backend, Decision Log #53). It is a scalar or an array of the declared
+    shape, strictly positive; the default ``1.0`` means unscaled.
+    """
 
     name: str
     shape: tuple[int, int] = (1, 1)
     lb: object = -math.inf
     ub: object = math.inf
+    scale: object = 1.0
     doc: str = ""
 
     def __post_init__(self):
@@ -148,6 +164,7 @@ class Constraint:
                 f"stacks constraints into one vector."
             )
         _check_bounds(self.lb, self.ub, self.shape, f"constraint {self.name!r}")
+        _check_scale(self.scale, self.shape, f"constraint {self.name!r}")
 
     @property
     def size(self) -> int:
@@ -455,6 +472,16 @@ def _check_bounds(lb, ub, shape: tuple, what: str) -> None:
     hi = numeric(ub, shape, f"{what}: ub")
     if np.any(lo > hi):
         raise ModelError(f"{what}: lb {lb!r} exceeds ub {ub!r}.")
+
+
+def _check_scale(scale, shape: tuple, what: str) -> None:
+    """A nominal magnitude: broadcastable to ``shape``, finite and strictly positive."""
+    values = numeric(scale, shape, f"{what}: scale", finite=True)
+    if np.any(values <= 0.0):
+        raise ModelError(
+            f"{what}: scale {scale!r} must be strictly positive; it divides the value the "
+            f"solver sees, and the default 1.0 means unscaled."
+        )
 
 
 def _ref(entry, group: str) -> tuple:

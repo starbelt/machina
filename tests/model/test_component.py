@@ -210,3 +210,58 @@ class TestCost:
     def test_a_vector_casadi_weight_is_refused(self):
         with pytest.raises(ModelError, match="weight"):
             Cost("j", weight=ca.MX.sym("w", 2))
+
+
+class TestScale:
+    """``scale`` is the nominal magnitude the compiler hands the solver backend."""
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    def test_the_default_leaves_an_existing_declaration_unchanged(self, kind):
+        assert kind("x") == kind("x", scale=1.0)
+        assert kind("x").scale == 1.0
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    @pytest.mark.parametrize("scale", [2.0, 7, np.float64(1e3)])
+    def test_a_scalar_scale_is_accepted(self, kind, scale):
+        assert kind("x", shape=3, scale=scale).size == 3
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    def test_an_array_of_the_declared_shape_is_accepted(self, kind):
+        assert kind("x", shape=3, scale=[1.0, 2.0, 3.0]).size == 3
+        assert kind("x", shape=2, scale=ca.DM([1.0, 1e3])).size == 2
+
+    def test_a_quantity_may_scale_a_matrix_elementwise(self):
+        assert Quantity("gain", shape=(2, 2), scale=np.full((2, 2), 10.0)).size == 4
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    def test_a_scale_of_the_wrong_shape_is_refused(self, kind):
+        with pytest.raises(ModelError, match="scale"):
+            kind("x", shape=3, scale=[1.0, 2.0])
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    @pytest.mark.parametrize("scale", [0, 0.0, -1.0, -1e-9])
+    def test_a_scale_that_is_not_strictly_positive_is_refused(self, kind, scale):
+        with pytest.raises(ModelError, match="scale"):
+            kind("x", scale=scale)
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    @pytest.mark.parametrize("scale", [math.nan, math.inf, -math.inf])
+    def test_a_scale_that_is_not_finite_is_refused(self, kind, scale):
+        with pytest.raises(ModelError, match="scale"):
+            kind("x", scale=scale)
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    def test_a_non_numeric_scale_is_refused(self, kind):
+        with pytest.raises(ModelError, match="scale"):
+            kind("x", scale="1.0")
+
+    @pytest.mark.parametrize("kind", [Quantity, Constraint])
+    def test_the_message_names_the_declaration_and_the_field(self, kind):
+        with pytest.raises(ModelError) as excinfo:
+            kind("thrust_cmd", scale=-1.0)
+        assert "thrust_cmd" in str(excinfo.value)
+        assert "scale" in str(excinfo.value)
+
+    def test_one_bad_element_of_an_array_scale_is_enough_to_refuse_it(self):
+        with pytest.raises(ModelError, match="scale"):
+            Quantity("x", shape=3, scale=[1.0, 0.0, 2.0])
