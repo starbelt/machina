@@ -66,6 +66,7 @@ def _isolated_signal_registry():
     if not HAS_CASADI:
         yield
         return
+    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh and coverage_total)
     import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
     from machina.model import signals
     state = signals.DEFAULT.snapshot()
