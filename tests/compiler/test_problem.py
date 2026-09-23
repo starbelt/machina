@@ -31,6 +31,7 @@ from machina.model import (
     Constraint,
     Cost,
     Declaration,
+    ModelError,
     Quantity,
     Role,
     Scope,
@@ -162,12 +163,31 @@ PARAMS_CSV = (
     "COMPUTE_W,30.0,f32,W,0.0,500.0,,design,A,fixture table,Onboard compute power draw\n"
 )
 
+UNLINKED_ROW = "RADIO_W,12.0,f32,W,0.0,100.0,,design,E,fixture table,Radio power draw\n"
 
-def params_table(tmp_path):
+
+def params_table(tmp_path, *, extra_rows=""):
     """``{name: ParamValue}`` from a minimal, valid params CSV."""
     csv = tmp_path / "params.csv"
-    csv.write_bytes(PARAMS_CSV.encode("utf-8"))
+    csv.write_bytes((PARAMS_CSV + extra_rows).encode("utf-8"))
     return values_from(csv)
+
+
+class Drifter(Component):
+    """``x_dot = -x``: one state, which the Phase 3 compiler has nowhere to put."""
+
+    def declare(self):
+        return Declaration(states=("x",), derivatives=("x",))
+
+    def build(self, helpers):
+        x = ca.SX.sym("x")
+        return {"f": ca.Function("drifter_f", [x], [-x], ["x"], ["x_dot"])}
+
+
+def drifting_problem() -> Problem:
+    registry = SignalRegistry()
+    registry.declare("x", 1, "m", doc="A drifting state")
+    return Problem([Drifter(), Knob(FREE, name="free")], registry=registry, verbose=False)
 
 
 # --- tests -------------------------------------------------------------------------------------
@@ -310,11 +330,46 @@ class TestValuePrecedence:
         record = record_for(problem, "probe")
         np.testing.assert_allclose([record.lb[0], record.ub[0]], [0.0, 500.0], rtol=1e-12)
 
+    def test_two_quantities_linked_to_one_params_name_both_take_the_table_value(self, tmp_path):
+        problem = Problem([Knob(Quantity("probe", unit="W", param="COMPUTE_W"), name="one"),
+                           Knob(Quantity("other", unit="W", param="COMPUTE_W"), name="two")],
+                          registry=SignalRegistry(), verbose=False)
+        problem.compile(values=params_table(tmp_path))
+        np.testing.assert_allclose(record_for(problem, "probe").x0, [30.0], rtol=1e-12)
+        np.testing.assert_allclose(record_for(problem, "other").x0, [30.0], rtol=1e-12)
+
+    def test_a_param_value_provenance_beats_the_one_the_quantity_declared(self, tmp_path):
+        quantity = Quantity("probe", unit="W", param="COMPUTE_W", default=1.0,
+                            provenance="D", source="bus spec")
+        record = record_for(probe(quantity).compile(values=params_table(tmp_path)), "probe")
+        assert (record.provenance, record.source) == ("A", "fixture table")
+
+    def test_a_matrix_parameter_reaches_the_backend_column_major(self):
+        value = [[1.0, 2.0], [3.0, 4.0]]
+        quantity = Quantity("probe", shape=(2, 2), role=Role.PARAMETER,
+                            provenance="A", source="fixture")
+        problem = probe(quantity, target=0.0).compile(values={"probe": value})
+        np.testing.assert_allclose(
+            np.asarray(problem.backend.parameter_value("probe")).ravel(order="F"),
+            np.asarray(value).ravel(order="F"), rtol=1e-12)
+
+    def test_an_override_value_becomes_the_stored_value_of_a_parameter(self):
+        quantity = Quantity("probe", role=Role.PARAMETER, default=1.0,
+                            provenance="A", source="fixture")
+        problem = probe(quantity).compile(overrides={"probe": {"value": 4.0}})
+        np.testing.assert_allclose(record_for(problem, "probe").value, [4.0], rtol=1e-12)
+        np.testing.assert_allclose(problem.backend.parameter_value("probe"), [4.0], rtol=1e-12)
+
     def test_param_limits_do_not_overwrite_bounds_the_quantity_declared(self, tmp_path):
         quantity = Quantity("probe", unit="W", lb=1.0, ub=2.0, param="COMPUTE_W")
         problem = probe(quantity).compile(values=params_table(tmp_path))
         record = record_for(problem, "probe")
         np.testing.assert_allclose([record.lb[0], record.ub[0]], [1.0, 2.0], rtol=1e-12)
+
+    def test_a_param_limit_fills_only_the_bound_the_quantity_left_open(self, tmp_path):
+        quantity = Quantity("probe", unit="W", lb=1.0, param="COMPUTE_W")
+        record = record_for(probe(quantity).compile(values=params_table(tmp_path)), "probe")
+        np.testing.assert_allclose([record.lb[0], record.ub[0]], [1.0, 500.0], rtol=1e-12)
 
     def test_an_override_beats_the_param_limits(self, tmp_path):
         quantity = Quantity("probe", unit="W", param="COMPUTE_W")
@@ -335,6 +390,23 @@ class TestValuePrecedence:
             probe(quantity).compile()
         assert "silent zero" in str(err.value)
 
+    def test_a_none_in_the_values_dict_is_no_value_for_a_parameter(self):
+        quantity = Quantity("probe", role=Role.PARAMETER)
+        with pytest.raises(ValueError, match="no value for quantity 'probe'"):
+            probe(quantity).compile(values={"probe": None})
+
+    def test_a_none_override_is_no_value_for_a_variable(self):
+        quantity = Quantity("probe", role=Role.VARIABLE)
+        with pytest.raises(ValueError, match="no value for quantity 'probe'") as err:
+            probe(quantity).compile(overrides={"probe": {"value": None}})
+        assert "None from any source" in str(err.value)
+
+    def test_a_wrong_shape_override_bound_names_the_quantity(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        with pytest.raises(ModelError, match="'probe'") as err:
+            probe(quantity).compile(overrides={"probe": {"lb": [0.0, 1.0, 2.0]}})
+        assert "lb bound" in str(err.value)
+
 
 class TestTheUnsourcedDefaultWarning:
 
@@ -354,6 +426,20 @@ class TestTheUnsourcedDefaultWarning:
         with pytest.raises(ValueError, match="provenance"):
             problem.compile(strict=True)
 
+    def test_the_strict_error_says_what_to_do_instead_of_naming_the_flag_again(self):
+        problem = probe(Quantity("probe", default=1.0))
+        with pytest.raises(ValueError) as err:
+            problem.compile(strict=True)
+        assert "strict=True makes" not in str(err.value)
+        assert "provenance=" in str(err.value) and "compile(values=" in str(err.value)
+
+    def test_strict_compiles_silently_when_every_default_is_sourced(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            problem = fleet().compile(strict=True)
+        assert [str(w.message) for w in caught] == []
+        assert list(problem.roles) == ["a/duty", "b/duty", "limit"]
+
     def test_a_sourced_default_is_silent(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -365,6 +451,81 @@ class TestTheUnsourcedDefaultWarning:
             warnings.simplefilter("always")
             probe(Quantity("probe", default=1.0)).compile(values={"probe": 2.0})
         assert [str(w.message) for w in caught] == []
+
+
+class TestOverrideKeysMustFitTheResolvedRole:
+
+    @pytest.mark.parametrize("key, value",
+                             [("x0", 0.5), ("lb", 0.0), ("ub", 9.0), ("scale", 2.0)])
+    def test_a_parameter_refuses_the_keys_only_a_variable_uses(self, key, value):
+        quantity = Quantity("probe", role=Role.PARAMETER, default=1.0,
+                            provenance="A", source="fixture")
+        with pytest.raises(ValueError, match="'parameter'") as err:
+            probe(quantity).compile(overrides={"probe": {key: value}})
+        assert repr(key) in str(err.value) and "'probe'" in str(err.value)
+
+    @pytest.mark.parametrize("key, value",
+                             [("x0", 0.5), ("lb", 0.0), ("ub", 9.0), ("scale", 2.0),
+                              ("provenance", "D"), ("source", "a note")])
+    def test_a_fixed_quantity_refuses_everything_but_role_and_value(self, key, value):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        with pytest.raises(ValueError, match="'fixed'") as err:
+            probe(quantity).compile(roles={"probe": Role.FIXED},
+                                    overrides={"probe": {"value": 0.5, key: value}})
+        assert repr(key) in str(err.value) and "'probe'" in str(err.value)
+
+    def test_a_variable_takes_every_quantity_key(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        problem = probe(quantity).compile(overrides={"probe": {
+            "role": Role.VARIABLE, "value": 1.0, "x0": 2.0, "lb": 0.0, "ub": 3.0,
+            "scale": 2.0, "provenance": "E", "source": "an override"}})
+        record = record_for(problem, "probe")
+        assert (record.provenance, record.source) == ("E", "an override")
+        np.testing.assert_allclose([record.x0[0], record.lb[0], record.ub[0], record.scale[0]],
+                                   [2.0, 0.0, 3.0, 2.0], rtol=1e-12)
+
+    def test_a_discrete_quantity_takes_the_variable_keys_too(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        problem = probe(quantity).compile(
+            roles={"probe": Role.DISCRETE}, discrete_mode="relax",
+            overrides={"probe": {"x0": 2.0, "lb": 0.0, "ub": 3.0}})
+        record = record_for(problem, "probe")
+        assert bool(record.discrete[0])
+        np.testing.assert_allclose([record.x0[0], record.ub[0]], [2.0, 3.0], rtol=1e-12)
+
+    def test_a_parameter_takes_role_value_provenance_and_source(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        problem = probe(quantity).compile(overrides={"probe": {
+            "role": Role.PARAMETER, "value": 5.0, "provenance": "M", "source": "a bench run"}})
+        record = record_for(problem, "probe")
+        assert (record.provenance, record.source) == ("M", "a bench run")
+        np.testing.assert_allclose(record.value, [5.0], rtol=1e-12)
+
+    def test_a_fixed_quantity_takes_role_and_value(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        problem = probe(quantity).compile(overrides={"probe": {"role": Role.FIXED,
+                                                               "value": 0.5}})
+        np.testing.assert_allclose(problem.fixed["probe"], [0.5], rtol=1e-12)
+
+    def test_an_unknown_provenance_code_names_the_allowed_ones(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        with pytest.raises(ValueError, match="'probe'") as err:
+            probe(quantity).compile(overrides={"probe": {"provenance": "X"}})
+        assert "'D'" in str(err.value) and "'M'" in str(err.value)
+
+    def test_a_source_that_is_not_a_string_is_refused(self):
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        with pytest.raises(ValueError, match="'probe'") as err:
+            probe(quantity).compile(overrides={"probe": {"source": 3}})
+        assert "string" in str(err.value)
+
+
+class TestOnlyStaticModelsCompile:
+
+    def test_a_declared_state_is_refused_with_the_state_named(self):
+        with pytest.raises(ValueError, match="machina.sim") as err:
+            drifting_problem().compile()
+        assert "'x'" in str(err.value) and "states" in str(err.value)
 
 
 class TestFixedQuantities:
@@ -452,6 +613,18 @@ class TestKeysAreChecked:
             fleet().compile(roles={"margin": Role.FIXED})
         assert "not a quantity" in str(err.value)
 
+    def test_a_params_table_row_nothing_links_to_is_ignored(self, tmp_path):
+        quantity = Quantity("probe", unit="W", role=Role.PARAMETER, param="COMPUTE_W")
+        values = params_table(tmp_path, extra_rows=UNLINKED_ROW)
+        assert list(values) == ["COMPUTE_W", "RADIO_W"]
+        problem = probe(quantity).compile(values=values)
+        np.testing.assert_allclose(record_for(problem, "probe").value, [30.0], rtol=1e-12)
+
+    def test_an_unknown_value_key_that_is_not_a_param_value_is_still_an_error(self):
+        with pytest.raises(ValueError, match="RADIO_W") as err:
+            fleet().compile(values={"RADIO_W": 12.0})
+        assert "not one" in str(err.value)
+
     def test_an_override_that_is_not_a_dict_says_what_to_write(self):
         with pytest.raises(ValueError, match="dict of override keys"):
             fleet().compile(overrides={"a/duty": 0.5})
@@ -536,6 +709,12 @@ class TestResolvingWithoutARebuild:
         with pytest.raises(ValueError, match="'variable'") as err:
             problem.solve(values={"a/duty": 0.5})
         assert "'limit'" in str(err.value)
+
+    def test_evaluate_after_a_resolve_reports_the_value_that_solve_was_given(self):
+        problem = fleet().compile().build()
+        values = problem.evaluate(problem.solve(values={"limit": 100.0}))
+        np.testing.assert_allclose(values["limit"], [100.0], rtol=1e-12)
+        np.testing.assert_allclose(values["a/power"], [50.0], rtol=1e-5)
 
     def test_a_warm_start_reaches_the_backend(self):
         problem = fleet().compile().build()
@@ -638,6 +817,18 @@ class TestLifecycle:
     def test_roles_before_compile_names_compile(self):
         with pytest.raises(RuntimeError, match=r"compile\(\) before roles"):
             assert fleet().roles
+
+    def test_the_backend_before_compile_names_compile(self):
+        with pytest.raises(RuntimeError, match=r"compile\(\) before backend"):
+            assert fleet().backend
+
+    def test_a_compile_that_failed_halfway_can_be_retried_on_the_same_problem(self):
+        problem = probe(Quantity("probe", default=1.0, provenance="A", source="fixture"))
+        with pytest.raises(ValueError, match="free"):
+            problem.compile(values={"free": [1.0, 2.0]})      # the second quantity, wrong shape
+        problem.compile(values={"free": 0.5})
+        assert [v.name for v in problem.backend.variables()] == ["probe", "free"]
+        np.testing.assert_allclose(record_for(problem, "free").x0, [0.5], rtol=1e-12)
 
     def test_compile_and_build_return_the_problem_itself(self):
         problem = fleet()

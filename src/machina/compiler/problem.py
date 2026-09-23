@@ -24,16 +24,30 @@ role
     role a solver can register.
 value
     ``overrides[path]["value"]``, ``values[path]``, ``values[Quantity.param]``
-    (the params-table link), ``Quantity.default``. No value from any source
-    is an error naming the quantity -- for a variable too, because a silent
-    ``x0 = 0`` is how a nonlinear solve ends up at a stationary point nobody
-    chose. A default with no provenance code is a warning listing every such
-    quantity at once, and ``strict=True`` makes it an error.
-bounds, scale, provenance
+    (the params-table link), ``Quantity.default``. A ``None`` from any of them
+    is no value at all and falls through to the next source. No value from any
+    source is an error naming the quantity -- for a variable too, because a
+    silent ``x0 = 0`` is how a nonlinear solve ends up at a stationary point
+    nobody chose. A default with no provenance code is a warning listing every
+    such quantity at once, and ``strict=True`` makes it an error.
+bounds, scale
     ``overrides[path][...]``, then the ``Quantity``, then the ``ParamValue``
     the params table supplied. A ``ParamValue``'s ``lo``/``hi`` become bounds
-    only where the ``Quantity`` left them at +-inf, so a component that knows
-    its own physical limits keeps them.
+    only where the ``Quantity`` left that one at +-inf, so a component that
+    knows its own physical limits keeps them, bound by bound.
+provenance, source
+    ``overrides[path][...]``, then the ``ParamValue`` -- a number that came
+    from the params table is sourced by that table, not by whatever the
+    declaration guessed -- then the ``Quantity``.
+
+Which override keys mean anything depends on the role the quantity resolved
+to: ``VARIABLE``/``DISCRETE`` take all of them, ``PARAMETER`` takes
+``role value provenance source``, ``FIXED`` takes ``role value``. An override
+that the role has no use for is an error rather than a key silently dropped.
+
+Phase 3 compiles *static* problems: quantities, algebraic signals, costs and
+constraints. A model that declares states or inputs is refused by
+``compile()`` naming them, because nothing here integrates them yet.
 
 Lifecycle::
 
@@ -52,7 +66,7 @@ import numpy as np
 
 from machina.model import signals as sig
 from machina.model.builder import Builder
-from machina.model.component import Role, numeric
+from machina.model.component import PROVENANCE_CODES, Role, numeric
 from machina.model.descriptor import SymbolDescriptor
 from machina.params.values import ParamValue
 from machina.solver import SolverBackend
@@ -62,6 +76,12 @@ __all__ = ["Problem"]
 _QUANTITY_KEYS = ("role", "value", "x0", "lb", "ub", "scale", "provenance", "source")
 _CONSTRAINT_KEYS = ("scale",)
 _REGISTERED = (Role.VARIABLE, Role.DISCRETE)
+_KEYS_FOR_ROLE = {
+    Role.VARIABLE: _QUANTITY_KEYS,
+    Role.DISCRETE: _QUANTITY_KEYS,
+    Role.PARAMETER: ("role", "value", "provenance", "source"),
+    Role.FIXED: ("role", "value"),
+}
 
 
 class Problem:
@@ -77,8 +97,11 @@ class Problem:
         self._components = components
         self._helpers = dict(helpers or {})
         self._registry = registry
-        self._backend = SolverBackend(solver, solver_opts, verbose=verbose)
+        self._solver = solver
+        self._solver_opts = solver_opts
+        self._verbose = verbose
 
+        self._backend = None
         self._builder = None
         self._wired = None
         self._quantity_of = {}
@@ -99,7 +122,13 @@ class Problem:
 
     @property
     def backend(self) -> SolverBackend:
-        """The solver backend. Registered after ``compile()``, solvable after ``build()``."""
+        """The solver backend. Registered by ``compile()``, solvable after ``build()``.
+
+        ``compile()`` registers into a backend of its own and hands it over
+        only once every leaf, constraint and cost is in, so a compile that
+        raised leaves no half-registered backend behind to trip over.
+        """
+        self._require_compiled("backend")
         return self._backend
 
     @property
@@ -128,9 +157,13 @@ class Problem:
         Args:
             roles:      ``{quantity path: Role or role name}``.
             values:     ``{quantity path or params name: number, array or ParamValue}``.
-                        ``machina.params.values_from(csv)`` can be passed whole.
+                        ``machina.params.values_from(csv)`` can be passed whole:
+                        a key naming nothing in this model is ignored when its
+                        value is a ``ParamValue`` (a table row no quantity links
+                        to), and an error for anything else.
             overrides:  ``{quantity path: {key: value}}`` with keys drawn from
-                        ``role value x0 lb ub scale provenance source``, or
+                        ``role value x0 lb ub scale provenance source`` -- and
+                        from the subset the resolved role uses -- or
                         ``{constraint path: {"scale": ...}}``.
             discrete_mode: kept for :meth:`build`; ``'native'`` needs an integer
                         plugin, ``'relax'`` solves discrete leaves as continuous.
@@ -155,34 +188,40 @@ class Problem:
                              for path, quantity, owner in builder.quantities()}
         constraint_of = {path: (constraint, owner)
                          for path, constraint, owner in builder.constraints()}
+        _check_static(builder)
         self._check_keys(roles, values, overrides, constraint_of)
 
-        leaves, unsourced = {}, []
+        backend = SolverBackend(self._solver, self._solver_opts, verbose=self._verbose)
+        resolved, fixed, leaves, unsourced = {}, {}, {}, []
         for path, quantity, owner in builder.quantities():
             over = overrides.get(path, {})
             role = _role_for(path, quantity, over, roles)
+            _check_override(path, role, over)
             value, param_value, bare_default = _value_for(path, quantity, over, values)
             if bare_default:
                 unsourced.append(path)
-            self._roles[path] = role
-            leaves[path] = self._register(path, quantity, owner, role, over,
-                                          value, param_value)
+            resolved[path] = role
+            leaves[path] = _register(backend, fixed, path, quantity, owner, role, over,
+                                     value, param_value)
 
         self._report_defaults(unsourced, strict)
 
         wired = builder.wire(leaves)
-        self._wired = wired
         for constraint in wired.constraints:
             over = overrides.get(constraint.path, {})
             declared = constraint_of[constraint.path][0]
-            self._backend.add_constraint(
+            backend.add_constraint(
                 constraint.expr, lb=constraint.lb, ub=constraint.ub, name=constraint.path,
                 scale=over.get("scale", declared.scale), doc=constraint.doc,
                 component=constraint.component)
         for cost in wired.costs:
-            self._backend.add_cost(cost.expr, name=cost.path, weight=cost.weight,
-                                   doc=cost.doc, component=cost.component)
+            backend.add_cost(cost.expr, name=cost.path, weight=cost.weight,
+                             doc=cost.doc, component=cost.component)
 
+        self._backend = backend
+        self._wired = wired
+        self._roles = resolved
+        self._fixed = fixed
         self._discrete_mode = discrete_mode
         self._compiled = True
         return self
@@ -202,13 +241,17 @@ class Problem:
                     f"compile(roles=...) names {key!r}, which is not a quantity of this model. "
                     f"Quantities: {known}."
                 )
-        for key in values:
-            if key not in self._quantity_of and key not in param_names:
-                raise ValueError(
-                    f"compile(values=...) names {key!r}, which is neither a quantity of this "
-                    f"model nor a params name any Quantity(param=...) links to. Quantities: "
-                    f"{known}. Params names: {param_names or '(none)'}."
-                )
+        for key, value in values.items():
+            if key in self._quantity_of or key in param_names:
+                continue
+            if isinstance(value, ParamValue):
+                continue      # a whole values_from(csv) table: a row nothing links to
+            raise ValueError(
+                f"compile(values=...) names {key!r}, which is neither a quantity of this "
+                f"model nor a params name any Quantity(param=...) links to. Quantities: "
+                f"{known}. Params names: {param_names or '(none)'}. Only a ParamValue row "
+                f"is ignored when nothing links to it; {value!r} is not one."
+            )
         for key, entries in overrides.items():
             is_quantity = key in self._quantity_of
             if not is_quantity and key not in constraint_of:
@@ -231,30 +274,6 @@ class Problem:
                         f"override of a {what}. Allowed for a {what}: {list(allowed)}."
                     )
 
-    def _register(self, path, quantity, owner, role, over, value, param_value):
-        """One leaf: a backend variable, a backend parameter, or a constant."""
-        shape = quantity.shape
-        provenance = _pick(over, "provenance", param_value, "provenance", quantity.provenance)
-        source = _pick(over, "source", param_value, "source", quantity.source)
-
-        if role is Role.FIXED:
-            flat = numeric(value, shape, f"fixed quantity {path!r}", finite=True)
-            self._fixed[path] = flat.reshape(shape, order="F") if shape[1] > 1 else flat
-            return ca.reshape(ca.DM(flat), shape[0], shape[1])
-
-        if role is Role.PARAMETER:
-            return self._backend.add_parameter(
-                path, shape, value=value, unit=quantity.unit, doc=quantity.doc,
-                provenance=provenance, source=source, component=owner, frame=quantity.frame)
-
-        lb = over["lb"] if "lb" in over else _bound(quantity.lb, shape, param_value, "lo")
-        ub = over["ub"] if "ub" in over else _bound(quantity.ub, shape, param_value, "hi")
-        return self._backend.add_variable(
-            path, shape, lb=lb, ub=ub, initial_guess=over.get("x0", value),
-            discrete=role is Role.DISCRETE, scale=over.get("scale", quantity.scale),
-            unit=quantity.unit, doc=quantity.doc, provenance=provenance, source=source,
-            component=owner, frame=quantity.frame)
-
     @staticmethod
     def _report_defaults(unsourced, strict) -> None:
         """One message for every quantity that fell back to an unsourced default."""
@@ -264,11 +283,12 @@ class Problem:
             f"{len(unsourced)} quantity/quantities took a Quantity(default=...) with no "
             f"provenance code: {unsourced}. Nobody chose those numbers for this problem -- pass "
             f"compile(values={{path: ...}}), or give the declaration provenance= and source= so "
-            f"a report can say where each came from. compile(strict=True) makes this an error."
+            f"a report can say where each came from."
         )
         if strict:
             raise ValueError(message)
-        warnings.warn(message, UserWarning, stacklevel=3)
+        warnings.warn(f"{message} compile(strict=True) makes this an error.",
+                      UserWarning, stacklevel=3)
 
     # --- adding to the compiled problem ---------------------------------------------------
 
@@ -291,6 +311,11 @@ class Problem:
         The descriptor carries the declared shape, unit and frame, so a
         problem-level cost or constraint can be written against a signal the
         components computed without reaching into the wiring.
+
+        ``symbol`` is an ``MX`` for anything the solver still decides. A
+        ``FIXED`` quantity -- and any signal that folds to a constant because
+        everything upstream of it is fixed -- comes back as a ``ca.DM``
+        instead; :func:`add_cost` and :func:`add_constraint` take either.
         """
         self._require_compiled("expr")
         if path not in self._wired.values:
@@ -364,10 +389,13 @@ class Problem:
         return self._eval_order, self._eval_fn
 
     def _value_order(self) -> list:
-        """Every wired path, once, in a fixed order: states, inputs, quantities, algebraic."""
+        """Every wired path, once, in a fixed order: quantities, then algebraic signals.
+
+        ``compile()`` refuses a model with states or inputs, so those two
+        orders are empty here by construction.
+        """
         order = []
-        for group in (self._builder.state_order, self._builder.input_order,
-                      self._builder.quantity_order, self._builder.algebraic_order):
+        for group in (self._builder.quantity_order, self._builder.algebraic_order):
             for path in group:
                 if path not in order and path in self._wired.values:
                     order.append(path)
@@ -437,6 +465,66 @@ class Problem:
 # --- module helpers ---------------------------------------------------------------------------
 
 
+def _check_static(builder) -> None:
+    """Phase 3 compiles quantities; a state or an input needs a transcription first."""
+    if not builder.state_order and not builder.input_order:
+        return
+    raise ValueError(
+        f"Problem compiles static problems (quantities only) in Phase 3; this model "
+        f"declares states {builder.state_order} and inputs {builder.input_order}. "
+        f"Simulate it with machina.sim, or fix the states."
+    )
+
+
+def _check_override(path, role, over) -> None:
+    """The override keys the resolved role can use, and the two metadata values."""
+    allowed = _KEYS_FOR_ROLE[role]
+    for key in over:
+        if key not in allowed:
+            raise ValueError(
+                f"compile(overrides={{{path!r}: ...}}) has key {key!r}, which means nothing "
+                f"for a quantity that compiled as {role.value!r}. Allowed for "
+                f"{role.value!r}: {list(allowed)}. Drop the key, or compile the quantity as "
+                f"a role that uses it with roles={{{path!r}: ...}}."
+            )
+    if over.get("provenance") is not None and over["provenance"] not in PROVENANCE_CODES:
+        raise ValueError(
+            f"compile(overrides={{{path!r}: {{'provenance': {over['provenance']!r}}}}}) is "
+            f"not a provenance code. Pass None or one of {list(PROVENANCE_CODES)} "
+            f"(documented, physics, estimate, assumption, measured)."
+        )
+    if over.get("source") is not None and not isinstance(over["source"], str):
+        raise ValueError(
+            f"compile(overrides={{{path!r}: {{'source': {over['source']!r}}}}}) must be None "
+            f"or a string saying where the number came from."
+        )
+
+
+def _register(backend, fixed, path, quantity, owner, role, over, value, param_value):
+    """One leaf: a backend variable, a backend parameter, or a constant."""
+    shape = quantity.shape
+    provenance = _pick(over, "provenance", param_value, "provenance", quantity.provenance)
+    source = _pick(over, "source", param_value, "source", quantity.source)
+
+    if role is Role.FIXED:
+        flat = numeric(value, shape, f"fixed quantity {path!r}", finite=True)
+        fixed[path] = flat.reshape(shape, order="F") if shape[1] > 1 else flat
+        return ca.reshape(ca.DM(flat), shape[0], shape[1])
+
+    if role is Role.PARAMETER:
+        return backend.add_parameter(
+            path, shape, value=value, unit=quantity.unit, doc=quantity.doc,
+            provenance=provenance, source=source, component=owner, frame=quantity.frame)
+
+    lb = _bound(path, "lb", over, quantity.lb, shape, param_value, "lo")
+    ub = _bound(path, "ub", over, quantity.ub, shape, param_value, "hi")
+    return backend.add_variable(
+        path, shape, lb=lb, ub=ub, initial_guess=over.get("x0", value),
+        discrete=role is Role.DISCRETE, scale=over.get("scale", quantity.scale),
+        unit=quantity.unit, doc=quantity.doc, provenance=provenance, source=source,
+        component=owner, frame=quantity.frame)
+
+
 def _role_for(path, quantity, over, roles) -> Role:
     """The role precedence, with the one rule that FLEXIBLE never survives it."""
     if "role" in over:
@@ -467,19 +555,30 @@ def _as_role(value, what: str) -> Role:
 
 
 def _value_for(path, quantity, over, values) -> tuple:
-    """``(value, ParamValue or None, took a bare default)``, highest source first."""
+    """``(value, ParamValue or None, took a bare default)``, highest source first.
+
+    A ``None`` is no value: an override, a ``values`` entry or a ``ParamValue``
+    carrying one falls through to the next source, and a chain of them reaches
+    the same error as a key nobody wrote.
+    """
+    offered = []
     if "value" in over:
-        return _unwrap(over["value"])
+        offered.append(over["value"])
     if path in values:
-        return _unwrap(values[path])
+        offered.append(values[path])
     if quantity.param is not None and quantity.param in values:
-        return _unwrap(values[quantity.param])
+        offered.append(values[quantity.param])
+    for candidate in offered:
+        value, param_value, bare_default = _unwrap(candidate)
+        if value is not None:
+            return value, param_value, bare_default
     if quantity.default is not None:
         return quantity.default, None, quantity.provenance is None
     raise ValueError(
-        f"no value for quantity {path!r}. Pass compile(values={{{path!r}: ...}}), or "
-        f"compile(overrides={{{path!r}: {{'value': ...}}}}), or give its Quantity a "
-        f"default=. A variable needs one too: an unchosen initial guess is a silent zero."
+        f"no value for quantity {path!r} -- a None from any source is no value at all. Pass "
+        f"compile(values={{{path!r}: ...}}), or compile(overrides={{{path!r}: "
+        f"{{'value': ...}}}}), or give its Quantity a default=. A variable needs one too: "
+        f"an unchosen initial guess is a silent zero."
     )
 
 
@@ -498,11 +597,15 @@ def _pick(over, key, param_value, attribute, fallback):
     return fallback
 
 
-def _bound(declared, shape, param_value, attribute):
+def _bound(path, key, over, declared, shape, param_value, attribute):
     """A ``ParamValue``'s limit applies only where the ``Quantity`` left the bound open."""
+    what = f"{path!r} {key} bound"
+    if key in over:
+        numeric(over[key], shape, what)
+        return over[key]
     if param_value is None:
         return declared
-    flat = numeric(declared, shape, "bound")
+    flat = numeric(declared, shape, what)
     open_bound = np.isneginf(flat) if attribute == "lo" else np.isposinf(flat)
     return getattr(param_value, attribute) if open_bound.all() else declared
 
