@@ -95,10 +95,10 @@ class Quantity:
     lb: object = -math.inf
     ub: object = math.inf
     frame: str = "none"
-    scale: object = 1.0
     provenance: str = None
     source: str = None
     param: str = None
+    scale: object = 1.0
 
     def __post_init__(self):
         _check_identifier(self.name, "quantity name")
@@ -152,8 +152,8 @@ class Constraint:
     shape: tuple[int, int] = (1, 1)
     lb: object = -math.inf
     ub: object = math.inf
-    scale: object = 1.0
     doc: str = ""
+    scale: object = 1.0
 
     def __post_init__(self):
         _check_identifier(self.name, "constraint name")

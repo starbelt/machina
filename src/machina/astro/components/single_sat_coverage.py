@@ -40,12 +40,6 @@ from machina.model import Component, Constraint, Declaration, Quantity, Role
 
 __all__ = ["SingleSatCoverage"]
 
-# The MEE Numerics scaling recipe: p is a radius of order 7000 km, so the squared altitude
-# rows below are of order 7000^2. Both constraints carry that as their scale, which is what
-# keeps the solver's view of them O(1) while every caller stays in km.
-_P_SCALE = 7000.0
-_ALTITUDE_SCALE = _P_SCALE ** 2
-
 
 class SingleSatCoverage(Component):
     """Five MEE elements, four parameters, one coverage number, two altitude rows.
@@ -98,6 +92,21 @@ class SingleSatCoverage(Component):
         """Largest admissible apogee radius ``[km]``."""
         return self.R_earth + self.apogee_max_km
 
+    @property
+    def p_scale(self) -> float:
+        """Nominal magnitude of ``p``: a radius, so of the order of ``R_earth``.
+
+        This is the MEE Numerics scaling recipe (measured as 7000 km for Earth)
+        derived from the body instead of hard-coded, so an instance built for
+        another central body keeps the solver's view of ``p`` O(1).
+        """
+        return self.R_earth
+
+    @property
+    def altitude_scale(self) -> float:
+        """Nominal magnitude of the squared altitude rows, ``p_scale ** 2``."""
+        return self.p_scale ** 2
+
     def sample_longitudes(self) -> np.ndarray:
         """The ``(N, 1)`` true-longitude grid, ``N`` points across ``[0, 2 pi)``."""
         n = self.n_sample_points
@@ -122,7 +131,7 @@ class SingleSatCoverage(Component):
                     role=Role.FLEXIBLE, default_role=Role.VARIABLE,
                     default=self.R_earth + 500.0,
                     lb=100.0, ub=self.R_earth + self.apogee_max_km,
-                    scale=_P_SCALE,
+                    scale=self.p_scale,
                     provenance="A", source="ISS-like starting orbit; MEE Numerics Rules 3-4"),
                 Quantity(
                     "f", unit="1",
@@ -137,7 +146,7 @@ class SingleSatCoverage(Component):
                     role=Role.FLEXIBLE, default_role=Role.VARIABLE,
                     default=0.0, lb=-1.0, ub=1.0,
                     provenance="A",
-                    source="non-zero f avoids the circular-orbit singularity (Rule 3)"),
+                    source="g = 0 at the start; f carries the non-zero eccentricity (Rule 3)"),
                 Quantity(
                     "h", unit="1",
                     doc="MEE inclination vector x-component, tan(i/2) cos(RAAN). The bounds "
@@ -163,8 +172,9 @@ class SingleSatCoverage(Component):
                     doc=f"Ground target position (lat = {self.target_lat_deg:.2f} deg, "
                         f"lon = {self.target_lon_deg:.2f} deg)",
                     default=self.target_position(),
-                    provenance="P",
-                    source="spherical Earth of radius R_earth; snapshot ECI geometry"),
+                    provenance="A",
+                    source="a chosen site, placed on a spherical Earth of radius R_earth; "
+                           "snapshot ECI geometry"),
                 Quantity(
                     "min_elevation", unit="rad", role=Role.PARAMETER,
                     doc=f"Elevation at which the coverage indicator reads 0.5 "
@@ -184,11 +194,11 @@ class SingleSatCoverage(Component):
             # common initial guess, and IPOPT declares the problem infeasible there.
             constraints=(
                 Constraint(
-                    "perigee_altitude", lb=0.0, scale=_ALTITUDE_SCALE,
+                    "perigee_altitude", lb=0.0, scale=self.altitude_scale,
                     doc=f"Perigee radius >= R_earth + {self.perigee_min_km:g} km, written "
                         f"(p - R_min)^2 - R_min^2 (f^2 + g^2) >= 0"),
                 Constraint(
-                    "apogee_altitude", lb=0.0, scale=_ALTITUDE_SCALE,
+                    "apogee_altitude", lb=0.0, scale=self.altitude_scale,
                     doc=f"Apogee radius <= R_earth + {self.apogee_max_km:g} km, written "
                         f"(R_max - p)^2 - R_max^2 (f^2 + g^2) >= 0"),
             ),

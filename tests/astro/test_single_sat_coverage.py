@@ -144,14 +144,19 @@ class TestDeclaration:
         assert q["f"].default == 0.01   # non-zero, per Rule 3
 
     def test_p_and_the_altitude_rows_carry_the_mee_numerics_scaling(self):
-        declaration = SingleSatCoverage().declare()
-        assert quantities(SingleSatCoverage())["p"].scale == 7000.0
+        """The nominal is the body radius, so it follows ``R_earth`` rather than Earth."""
+        component = SingleSatCoverage()
+        declaration = component.declare()
+        assert quantities(component)["p"].scale == component.R_earth == 6378.137
         assert [c.name for c in declaration.constraints] == \
             ["perigee_altitude", "apogee_altitude"]
         for constraint in declaration.constraints:
-            assert constraint.scale == 7000.0 ** 2
+            assert constraint.scale == component.R_earth ** 2
             assert constraint.lb == 0.0
             assert constraint.shape == (1, 1)
+        mars = SingleSatCoverage(R_earth=3396.2, mu=42828.37)
+        assert quantities(mars)["p"].scale == 3396.2
+        assert mars.declare().constraints[0].scale == 3396.2 ** 2
 
     def test_target_default_is_on_the_sphere_and_points_at_the_target(self):
         component = SingleSatCoverage(target_lat_deg=38.9, target_lon_deg=-77.0)
@@ -287,9 +292,12 @@ class TestAgreementWithAprilsAgent:
 
         april = AprilAgent("sat", {"n_sample_points": 24})
         leaf_names = [d.path.rpartition("/")[2] for d in april.declare()]
-        # April's paths are grouped ('orbital/p', 'target/position'); the component
-        # flattens them, but the order -- the vector layout -- is the same.
-        assert leaf_names[:5] == list(QUANTITY_NAMES[:5])
+        # April's paths are grouped ('orbital/p', 'target/position') and its parameters
+        # are named differently ('L', 'position', 'min_elevation', 'sigmoid_k'); the
+        # component flattens and renames, but the order -- the vector layout -- is the
+        # same, and the A/B below maps overrides by that position.
+        assert leaf_names == ["p", "f", "g", "h", "k", "L", "position", "min_elevation",
+                              "sigmoid_k"]
         assert len(leaf_names) == len(QUANTITY_NAMES)
 
 
@@ -301,7 +309,8 @@ class TestAgreementWithAprilsAgent:
 # is what makes them oracles rather than regressions: the two paths hand IPOPT the same NLP.
 
 APRIL_OPTS = {"ipopt.tol": 1e-4, "ipopt.acceptable_tol": 1e-2, "ipopt.acceptable_iter": 3}
-ALTITUDE_SCALE = 7000.0**2
+P_SCALE = R_EARTH                 # the component's nominal for p: the body radius
+ALTITUDE_SCALE = P_SCALE**2
 
 # x0 and the box, in the declaration order that is the decision-vector layout.
 ELEMENT_BOUNDS = (("p", R_EARTH + 200.0, R_EARTH + 1600.0), ("f", -0.30, 0.30),
@@ -318,8 +327,9 @@ def coverage_component() -> SingleSatCoverage:
 def coverage_overrides(*, unit_scale: bool) -> dict:
     """Initial guess and box for the five elements; optionally scales back to 1.
 
-    The component declares ``scale = 7000`` on ``p`` and ``7000^2`` on both altitude rows, so
-    the *default* compile is the scaled recipe. April's unscaled problem is the override.
+    The component declares ``scale = R_earth`` on ``p`` and ``R_earth^2`` on both altitude
+    rows (the MEE Numerics recipe, derived from the body), so the *default* compile is the
+    scaled one. April's unscaled problem is the override.
     """
     state = iss_like()                               # p = R + 500, f = 0.01, g = 0, RAAN 240 deg
     overrides = {f"sat/{name}": {"x0": state[name], "lb": lb, "ub": ub}
@@ -416,7 +426,7 @@ class TestOracles:
         backend = coverage_problem({}, unit_scale=False, build=False).backend
         variables = {record.name: record for record in backend.variables()}
         constraints = {record.name: record for record in backend.constraints()}
-        np.testing.assert_array_equal(variables["sat/p"].scale, [7000.0])
+        np.testing.assert_array_equal(variables["sat/p"].scale, [P_SCALE])
         assert constraints["sat/perigee_altitude"].scale == ALTITUDE_SCALE
         assert constraints["sat/apogee_altitude"].scale == ALTITUDE_SCALE
 
