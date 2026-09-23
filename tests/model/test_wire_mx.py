@@ -2,10 +2,11 @@
 Wiring the graph with MX leaves from the solver backend, and solving it.
 
 ``wire()`` is the one seam between the model layer and Layer 1, and this file
-is its stand-in consumer until :class:`machina.compiler.Problem` lands in
-Phase 3. ``compile_problem`` below is what that class will be, minus the role
-and value precedence rules: create a backend leaf per quantity, wire, register
-every ``h`` as a constraint and every ``J`` as a cost term, build.
+is the model layer's own consumer of it. :class:`machina.compiler.Problem`
+now does this for real, with the role and value precedence rules on top;
+``compile_problem`` below is the same walk without them -- create a backend
+leaf per quantity, wire, register every ``h`` as a constraint and every ``J``
+as a cost term, build -- so the seam stays testable on its own.
 
 The model is a two-satellite power budget with a known closed-form optimum,
 so the assertions pin numbers rather than shapes:
@@ -102,10 +103,10 @@ def fleet(registry=None):
 
 
 def compile_problem(builder, *, values=None, solver="ipopt"):
-    """What ``compiler.Problem.compile`` will be, minus value precedence.
+    """What ``compiler.Problem.compile`` does, minus the value precedence.
 
-    The compiler is the only thing that calls ``backend.add_*``; components
-    and the builder never do.
+    The model-layer-only check: the compiler is the only thing that calls
+    ``backend.add_*``; components and the builder never do.
     """
     values = dict(values or {})
     backend = SolverBackend(solver, verbose=False)
