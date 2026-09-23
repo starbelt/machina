@@ -25,12 +25,11 @@ The tool never guesses a value. ``sync`` leaves ``value`` blank and this
 linter refuses the blank unless told the table is a work in progress.
 """
 
-import csv
-import io
 import math
 import re
 import struct
 
+from machina.params import table
 from machina.params.contract import LintIssue
 from machina.units import NON_SI_UNITS, UNIT_RE, is_si, is_well_formed
 
@@ -74,7 +73,12 @@ class DefaultContract:
 
     def lint_text(self, text: str, *, allow_unfilled: bool = False) -> list:
         """Every problem with the table, in file order. Warnings do not fail it."""
-        rows = list(csv.reader(io.StringIO(text)))
+        # A table the parser cannot read at all is one issue, not a traceback -- the same
+        # shape as an Excel BOM, which falls out below as a header mismatch.
+        try:
+            rows = table.parse_rows(text)
+        except ValueError as exc:
+            return [LintIssue(str(exc))]
         if not rows:
             return [LintIssue(f"the table is empty; it needs at least the header "
                               f"{','.join(self.COLUMNS)}")]

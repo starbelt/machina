@@ -24,9 +24,18 @@ from machina.params import contract
 from machina.params.registry import ParamDecl
 
 __all__ = ["TOOL_OWNED", "human_owned", "columns", "Row", "format_number", "row_from_decl",
-           "dumps", "loads", "read", "write"]
+           "dumps", "loads", "parse_rows", "read", "write"]
 
 TOOL_OWNED = ("type", "unit", "min", "max", "default", "mutability", "comment")
+
+# A bare CR or LF inside a field is refused on both sides of the pipe. Nothing in a params
+# table legitimately spans two lines, and the interpreters disagree about the bytes: 3.12's
+# csv.writer quotes such a field, 3.10's does not, and 3.10's csv.reader then refuses its own
+# output. Refusing it is what leaves dumps() with no freedom in it.
+_NEWLINE_ADVICE = "a params table field is one line -- remove it and re-run `machina params sync`"
+# Stands in for a bare CR while parsing, so 3.10 and 3.12 read the same fields and name the
+# same row. Private-use, so it cannot collide with anything a params table would carry.
+_CR_MARK = ""
 
 Row = dict
 
@@ -78,14 +87,61 @@ def row_from_decl(decl: ParamDecl, **human) -> Row:
     return {c: derived[c] if c in derived else human.get(c, "") for c in columns()}
 
 
+def _refuse_newline(where) -> None:
+    raise ValueError(f"row {where} contains a bare carriage return or newline inside a field; "
+                     f"{_NEWLINE_ADVICE}")
+
+
+def parse_rows(text: str) -> list:
+    """The raw fields of every line, refusing a bare CR or LF inside any field.
+
+    One parser for both readers -- :func:`loads` and the default contract's linter -- so the
+    two agree about what a table is, and the same row gets named on either interpreter.
+
+    3.10's ``csv.reader`` raises on a bare CR in an unquoted field where 3.12's accepts it
+    silently, so the CR is swapped for a marker the reader has no opinion about *before*
+    parsing. Both then see the same fields, and the scan below reports the same row. A CR
+    that is half of a CRLF line end is a separate complaint, made by ``check`` when the file
+    fails to re-emit; it is collapsed here so it cannot be mistaken for this one.
+    """
+    scan = text.replace("\r\n", "\n")
+    marked = "\r" in scan
+    if marked:
+        scan = scan.replace("\r", _CR_MARK)
+    try:
+        rows = list(csv.reader(io.StringIO(scan)))
+    except csv.Error as exc:
+        raise ValueError(f"a field contains a bare carriage return or newline "
+                         f"({exc}); {_NEWLINE_ADVICE}") from None
+    if not rows:
+        return rows
+    # Name the offending row the way a human would find it: by its name column when the header
+    # has one and the cell is filled, else by its 1-based position in the file.
+    name_at = rows[0].index("name") if "name" in rows[0] else None
+    for number, fields in enumerate(rows, start=1):
+        for field in fields:
+            if (marked and _CR_MARK in field) or "\n" in field:
+                named = name_at is not None and number > 1 and name_at < len(fields)
+                _refuse_newline(repr(fields[name_at]) if named and fields[name_at] else number)
+    return rows
+
+
 def dumps(rows: list) -> str:
-    """Canonical text: the contract's header, rows sorted by name, LF line ends."""
+    """Canonical text: the contract's header, rows sorted by name, LF line ends.
+
+    A field holding a bare CR or LF is refused before anything is written: the two
+    interpreters' writers spell it differently, and this emitter has one spelling per table.
+    """
     header = columns()
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(header)
     for row in sorted(rows, key=lambda r: r["name"]):
-        writer.writerow([row[c] for c in header])
+        fields = [row[c] for c in header]
+        for field in fields:
+            if "\r" in str(field) or "\n" in str(field):
+                _refuse_newline(repr(row["name"]) if row["name"] else "(unnamed)")
+        writer.writerow(fields)
     return out.getvalue()
 
 
@@ -96,7 +152,7 @@ def loads(text: str) -> list:
             "the file starts with a UTF-8 byte-order mark, which Excel's 'CSV UTF-8' save "
             "adds. Save it as plain CSV (or run `machina params sync` to re-emit it)."
         )
-    rows = list(csv.reader(io.StringIO(text)))
+    rows = parse_rows(text)
     if not rows:
         return []
     if tuple(rows[0]) != header:
@@ -114,7 +170,7 @@ def loads(text: str) -> list:
 
 def read(path: Path) -> list:
     """The rows of a table. Bytes are decoded as ``check`` decodes them: CRLF line ends
-    are read as LF, and a lone CR inside a field is kept rather than translated."""
+    are read as LF, and a lone CR inside a field is refused rather than translated."""
     path = Path(path)
     if not path.exists():
         return []

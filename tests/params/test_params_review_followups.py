@@ -149,18 +149,26 @@ class TestSpellingsAndBytes:
         errors, _ = check_mod.check(path, all_params())
         assert any("byte-order mark" in e for e in errors)
 
-    def test_a_lone_cr_inside_a_field_survives_sync(self, tmp_path):
-        """check called such a file canonical while sync rewrote the CR as LF."""
+    def test_a_bare_cr_inside_a_field_is_one_error_naming_the_row(self, tmp_path):
+        """3.12's csv.writer quotes such a field and 3.10's does not, so the emitter had two
+        spellings and 3.10's reader refused its own output. It is refused on both sides now."""
         reg = ParamRegistry()
         param("A_X", registry=reg, **OK)
         path = tmp_path / "p.csv"
+        path.write_bytes(f"{HEADER}\nA_X,1.0,f64,m,0.0,10.0,,design,M,cr\rhere,a\n".encode())
+        errors, warnings = check_mod.check(path, reg.all())
+        assert len(errors) == 1 and warnings == []
+        assert "bare carriage return or newline" in errors[0] and "A_X" in errors[0]
+
+    @pytest.mark.parametrize("character", ["\r", "\n"])
+    def test_dumps_refuses_a_field_that_holds_a_line_break(self, character):
+        reg = ParamRegistry()
+        param("A_X", registry=reg, **OK)
         rows = sync.apply(reg.all(), [])
-        rows[0]["value"], rows[0]["provenance"], rows[0]["source"] = "1.0", "M", "cr\rhere"
-        table.write(path, rows)
-        before = path.read_bytes()
-        assert check_mod.check(path, reg.all()) == ([], [])
-        sync.sync(path, reg.all())
-        assert path.read_bytes() == before
+        rows[0]["value"], rows[0]["provenance"] = "1.0", "M"
+        rows[0]["source"] = f"cr{character}here"
+        with pytest.raises(ValueError, match="bare carriage return or newline"):
+            table.dumps(rows)
 
 
 class TestDenseKeepsMx:
