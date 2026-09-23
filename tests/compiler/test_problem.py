@@ -31,7 +31,6 @@ from machina.model import (
     Constraint,
     Cost,
     Declaration,
-    ModelError,
     Quantity,
     Role,
     Scope,
@@ -403,9 +402,10 @@ class TestValuePrecedence:
 
     def test_a_wrong_shape_override_bound_names_the_quantity(self):
         quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
-        with pytest.raises(ModelError, match="'probe'") as err:
+        with pytest.raises(ValueError, match="'probe'") as err:
             probe(quantity).compile(overrides={"probe": {"lb": [0.0, 1.0, 2.0]}})
         assert "lb bound" in str(err.value)
+        assert "compile(overrides=" in str(err.value)
 
 
 class TestTheUnsourcedDefaultWarning:

@@ -68,6 +68,7 @@ from machina.model import signals as sig
 from machina.model.builder import Builder
 from machina.model.component import PROVENANCE_CODES, Role, numeric
 from machina.model.descriptor import SymbolDescriptor
+from machina.model.errors import ModelError
 from machina.params.values import ParamValue
 from machina.solver import SolverBackend
 
@@ -601,7 +602,12 @@ def _bound(path, key, over, declared, shape, param_value, attribute):
     """A ``ParamValue``'s limit applies only where the ``Quantity`` left the bound open."""
     what = f"{path!r} {key} bound"
     if key in over:
-        numeric(over[key], shape, what)
+        # The model layer's check, re-raised as the compile-input error every other bad
+        # override is: ModelError is for the structure of a model, not for what a caller passed.
+        try:
+            numeric(over[key], shape, what)
+        except ModelError as exc:
+            raise ValueError(f"compile(overrides=...): {exc}") from None
         return over[key]
     if param_value is None:
         return declared
