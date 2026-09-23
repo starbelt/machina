@@ -125,6 +125,12 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"error: {args.csv}: {exc}")
         return 1
+    except ImportError as exc:
+        # A module that does not import is about --modules (or --contract), not the table, so
+        # it is not prefixed with the csv. load_all still raises: the library keeps its
+        # exception, and only the command line turns it into a line and an exit code.
+        print(f"error: {exc}")
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover
