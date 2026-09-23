@@ -11,6 +11,7 @@ Signals     ``Signal``, ``Frame``, ``Aggregation``, ``SignalRegistry``, ``DEFAUL
 Components  ``Component``, ``Declaration``, ``Quantity``, ``Constraint``, ``Cost``,
             ``Role``, ``Scope``
 Builder     ``Builder``, ``Wired``, ``WiredConstraint``, ``WiredCost``, ``Placed``
+Descriptors ``FunctionDescriptor``, ``SymbolDescriptor``
 Errors      ``SignalError``, ``ModelError``
 """
 
@@ -24,6 +25,7 @@ from machina.model.component import (
     Role,
     Scope,
 )
+from machina.model.descriptor import FunctionDescriptor, SymbolDescriptor
 from machina.model.errors import ModelError, SignalError
 from machina.model.signals import (
     DEFAULT,
@@ -42,4 +44,5 @@ __all__ = [
     "declare", "declare_frame", "get", "all_signals",
     "Component", "Declaration", "Quantity", "Constraint", "Cost", "Role", "Scope",
     "Builder", "Wired", "WiredConstraint", "WiredCost", "Placed", "ModelError",
+    "FunctionDescriptor", "SymbolDescriptor",
 ]
