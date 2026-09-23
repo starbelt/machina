@@ -52,7 +52,7 @@ def sha256_of(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def layout_block(order, registry, *, sizes=None) -> dict:
+def layout_block(order, registry) -> dict:
     """``{path: {offset, shape, unit, frame}}`` for one vector, in vector order.
 
     ``order`` is a builder order (``state_order``, ``input_order``,

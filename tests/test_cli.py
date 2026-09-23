@@ -14,7 +14,7 @@ import textwrap
 import pytest
 
 from machina import cli
-from machina.params import table
+from machina.params import modules, table
 
 pytestmark = pytest.mark.requires_casadi
 
@@ -87,9 +87,19 @@ class TestCheck:
 class TestArguments:
 
     def test_a_declaring_module_that_does_not_import_says_so(self, tmp_path, monkeypatch):
-        csv = project(tmp_path, monkeypatch, "decl_args_a")
+        """The library keeps its exception. Only the command line below turns it into a line."""
+        project(tmp_path, monkeypatch, "decl_args_a")
         with pytest.raises(ImportError, match="failed to import"):
-            run("params", "sync", "--csv", str(csv), "--modules", "no_such_module_here")
+            modules.load_all(["no_such_module_here"])
+
+    def test_a_typod_module_name_is_an_error_line_not_a_traceback(self, tmp_path, monkeypatch):
+        csv = project(tmp_path, monkeypatch, "decl_args_e")
+        out = subprocess.run([sys.executable, "-m", "machina", "params", "sync", "--csv",
+                              str(csv), "--modules", "decl_args_typo"],
+                             cwd=tmp_path, capture_output=True, text=True)
+        assert out.returncode == 1
+        assert "error:" in out.stdout and "decl_args_typo" in out.stdout
+        assert "Traceback" not in out.stdout + out.stderr
 
     def test_an_empty_module_list_is_refused_naming_the_file(self, tmp_path, monkeypatch,
                                                              capsys):
