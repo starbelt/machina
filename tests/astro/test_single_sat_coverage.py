@@ -7,12 +7,14 @@ The last of those is the foundation of the A/B: the port is only a port if
 the two implementations return the same numbers from the same inputs, so the
 agreement test evaluates both at an ISS-like state and at an eccentric one.
 
-The oracle tests -- April's documented stop point, the strict scaled optimum
-and the solved A/B against the agent -- are added by the next agent in a
-``TestOracles`` class, and are deliberately absent here.
+``TestOracles`` at the foot of the file closes that loop through the
+compiler: April's documented stop point, the strict scaled optimum, and an
+A/B that evaluates both compilers' NLPs -- cost, constraints and both
+Jacobians -- at the same initial point.
 """
 
 import math
+import warnings
 
 import casadi as ca
 import numpy as np
@@ -289,3 +291,180 @@ class TestAgreementWithAprilsAgent:
         # flattens them, but the order -- the vector layout -- is the same.
         assert leaf_names[:5] == list(QUANTITY_NAMES[:5])
         assert len(leaf_names) == len(QUANTITY_NAMES)
+
+
+# --- the oracles ------------------------------------------------------------------------------
+#
+# The motivating problem of Math/MEE Numerics, compiled through ``Problem``: maximise coverage
+# of Washington DC over a 200-1600 km altitude box from an ISS-like start. Three numbers are
+# pinned, all measured on the April path first (tests/solver/test_scaling.py), and the A/B below
+# is what makes them oracles rather than regressions: the two paths hand IPOPT the same NLP.
+
+APRIL_OPTS = {"ipopt.tol": 1e-4, "ipopt.acceptable_tol": 1e-2, "ipopt.acceptable_iter": 3}
+ALTITUDE_SCALE = 7000.0**2
+
+# x0 and the box, in the declaration order that is the decision-vector layout.
+ELEMENT_BOUNDS = (("p", R_EARTH + 200.0, R_EARTH + 1600.0), ("f", -0.30, 0.30),
+                  ("g", -0.30, 0.30), ("h", -1.5, 1.5), ("k", -1.5, 1.5))
+
+
+def coverage_component() -> SingleSatCoverage:
+    """The component the motivating problem is built from."""
+    return SingleSatCoverage(target_lat_deg=38.9, target_lon_deg=-77.0, n_sample_points=24,
+                             min_elevation_deg=10.0, sigmoid_k=20.0, perigee_min_km=200.0,
+                             apogee_max_km=1600.0, mu=MU, R_earth=R_EARTH)
+
+
+def coverage_overrides(*, unit_scale: bool) -> dict:
+    """Initial guess and box for the five elements; optionally scales back to 1.
+
+    The component declares ``scale = 7000`` on ``p`` and ``7000^2`` on both altitude rows, so
+    the *default* compile is the scaled recipe. April's unscaled problem is the override.
+    """
+    state = iss_like()                               # p = R + 500, f = 0.01, g = 0, RAAN 240 deg
+    overrides = {f"sat/{name}": {"x0": state[name], "lb": lb, "ub": ub}
+                 for name, lb, ub in ELEMENT_BOUNDS}
+    if unit_scale:
+        overrides["sat/p"]["scale"] = 1.0
+        overrides["sat/perigee_altitude"] = {"scale": 1.0}
+        overrides["sat/apogee_altitude"] = {"scale": 1.0}
+    return overrides
+
+
+def coverage_problem(solver_opts: dict, *, unit_scale: bool, build: bool = True):
+    """The compiled problem. Warnings are left alone: a default compile must not raise any."""
+    from machina.compiler import Problem
+
+    problem = Problem([Scope("sat", [coverage_component()])],
+                      solver_opts=solver_opts, verbose=False)
+    problem.compile(overrides=coverage_overrides(unit_scale=unit_scale))
+    problem.add_cost(-problem.expr("sat/coverage_total").symbol, name="neg_coverage")
+    return problem.build() if build else problem
+
+
+def april_problem(solver_opts: dict):
+    """The same problem through April's agent and the compiler stub, unscaled.
+
+    Copied from ``tests/solver/test_scaling.py::TestCoverageProblem.compile`` so the A/B owns
+    its reference; the April path itself is untouched.
+    """
+    from machina.agents import SingleSatCoverage as AprilAgent
+    from machina.compiler.compiler_stub import CompilerStub
+    from machina.solver import SolverBackend
+
+    agent = AprilAgent("sat", {
+        "n_sample_points": 24,
+        "ground_target": {"lat_deg": 38.9, "lon_deg": -77.0},
+        "coverage": {"min_elevation_deg": 10.0, "sigmoid_k": 20.0},
+        "altitude_bounds": {"perigee_min_km": 200.0, "apogee_max_km": 1600.0},
+        "constants": {"mu": MU, "R_earth": R_EARTH},
+    })
+    compiler = CompilerStub(solver=SolverBackend(verbose=False, solver_opts=solver_opts))
+    compiler.add_agent(agent)
+    state = iss_like()
+    overrides = {f"sat/orbital/{name}": {"value": state[name], "lb": lb, "ub": ub}
+                 for name, lb, ub in ELEMENT_BOUNDS}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        compiler.compile(overrides=overrides)
+    compiler.add_cost(-compiler.resolve("sat", "coverage/total").symbol, name="neg_coverage")
+    compiler.build_solver()
+    return compiler
+
+
+def nlp_function(backend) -> ca.Function:
+    """``(x, p) -> (f, g, df/dx, dg/dx)`` from a backend's physical, unscaled NLP."""
+    nlp = backend.nlp_expressions()
+    x, p, f, g = nlp["x"], nlp["p"], nlp["f"], nlp["g"]
+    return ca.Function("nlp", [x, p], [f, g, ca.jacobian(f, x), ca.jacobian(g, x)])
+
+
+def parameter_vector(backend) -> ca.DM:
+    """The stored parameter values, stacked in registration order."""
+    return ca.vertcat(*[ca.DM(np.asarray(record.value, dtype=float).reshape(-1, 1))
+                        for record in backend.parameters()])
+
+
+class TestOracles:
+    """The pinned numbers of Math/MEE Numerics, reproduced through ``Problem``."""
+
+    def test_april_recipe_at_unit_scale(self):
+        """Unscaled, with April's loose acceptable tolerance: her documented stop point."""
+        res = coverage_problem(APRIL_OPTS, unit_scale=True).solve()
+        assert res.status == "Solved_To_Acceptable_Level"
+        assert res.iterations == 13
+        np.testing.assert_allclose(res.f_opt, -0.12583632, atol=1e-7)
+
+    def test_unscaled_strict_solve_fails(self):
+        """Why the scaling exists: strict defaults on the unscaled rows hit a NaN."""
+        res = coverage_problem({}, unit_scale=True).solve()
+        assert not res.success
+        assert res.status == "Invalid_Number_Detected"
+
+    def test_scaled_strict_solve_converges_to_the_apogee_bound(self):
+        """With the declared scales, the same defaults converge, with apogee active."""
+        res = coverage_problem({}, unit_scale=False).solve()
+        assert res.status == "Solve_Succeeded"
+        np.testing.assert_allclose(res.f_opt, -0.16394, atol=1e-4)
+        np.testing.assert_allclose(res["sat/p"], [R_EARTH + 1600.0], rtol=1e-6)
+        assert res.bound_multiplier("sat/p")[0] > 0.0
+        # Physical units (km^2); the solver's tolerance applies to the scaled row.
+        assert res.constraint("sat/apogee_altitude").value[0] / ALTITUDE_SCALE >= -1e-7
+
+    def test_the_declared_scales_reach_the_backend(self):
+        """The component's scaling recipe survives compile, and an override replaces it."""
+        backend = coverage_problem({}, unit_scale=False, build=False).backend
+        variables = {record.name: record for record in backend.variables()}
+        constraints = {record.name: record for record in backend.constraints()}
+        np.testing.assert_array_equal(variables["sat/p"].scale, [7000.0])
+        assert constraints["sat/perigee_altitude"].scale == ALTITUDE_SCALE
+        assert constraints["sat/apogee_altitude"].scale == ALTITUDE_SCALE
+
+        unit = coverage_problem({}, unit_scale=True, build=False).backend
+        unit_variables = {record.name: record for record in unit.variables()}
+        np.testing.assert_array_equal(unit_variables["sat/p"].scale, [1.0])
+        assert all(record.scale == 1.0 for record in unit.constraints())
+
+    def test_the_default_compile_warns_about_nothing(self):
+        """Every declared default carries a provenance code, so no value is unsourced."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            coverage_problem({}, unit_scale=False, build=False)
+        assert [str(w.message) for w in caught if issubclass(w.category, UserWarning)] == []
+
+    def test_ab_against_the_april_path(self):
+        """Both compilers hand IPOPT the same NLP, to the last bit where AD allows.
+
+        Cost, constraints and both Jacobians, evaluated at the shared initial point. ``f``,
+        ``g`` and ``dg/dx`` are bit-identical; ``df/dx`` differs in the last couple of ulp
+        because the component reaches the cost through ``ca.Function`` call nodes and the
+        agent through one inlined graph, so reverse mode accumulates in a different order.
+        """
+        ours = coverage_problem({}, unit_scale=True, build=False).backend
+        theirs = april_problem({}).solver
+
+        # The two orders correspond: same five elements, same four parameters, same layout.
+        assert ours.variable_order() == [f"sat/{name}" for name, _, _ in ELEMENT_BOUNDS]
+        assert ([path.rpartition("/")[2] for path in theirs.variable_order()]
+                == [path.rpartition("/")[2] for path in ours.variable_order()])
+        assert ours.parameter_order() == ["sat/L", "sat/r_target", "sat/min_elevation",
+                                          "sat/sigmoid_k"]
+        assert theirs.parameter_order() == ["sat/sample_points/L", "sat/target/position",
+                                            "sat/coverage/min_elevation",
+                                            "sat/coverage/sigmoid_k"]
+        p_value = parameter_vector(ours)
+        np.testing.assert_array_equal(np.array(p_value), np.array(parameter_vector(theirs)))
+
+        state = iss_like()
+        x0 = ca.DM([[state[name]] for name, _, _ in ELEMENT_BOUNDS])
+        outputs = ("f", "g", "df/dx", "dg/dx")
+        for name, mine, aprils in zip(outputs, nlp_function(ours)(x0, p_value),
+                                      nlp_function(theirs)(x0, p_value)):
+            mine, aprils = np.array(ca.densify(mine)), np.array(ca.densify(aprils))
+            if name == "df/dx":
+                # A few ulp, and only here. Tight enough that a real graph difference fails.
+                np.testing.assert_allclose(mine, aprils, rtol=1e-15, atol=0,
+                                           err_msg=f"{name} differs by more than a few ulp")
+            else:
+                np.testing.assert_array_equal(mine, aprils,
+                                              err_msg=f"{name} is not bit-identical")
