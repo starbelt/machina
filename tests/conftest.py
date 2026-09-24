@@ -66,7 +66,12 @@ def _isolated_signal_registry():
     if not HAS_CASADI:
         yield
         return
+    # Declaration order is the layout ABI, so packs are imported oldest first: rigid (Phase 2a)
+    # before astro (Phase 3a). Append here, never insert; the isort split keeps the linter from
+    # re-sorting them alphabetically.
     import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
+    # isort: split
+    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh and coverage_total)
     from machina.model import signals
     state = signals.DEFAULT.snapshot()
     yield

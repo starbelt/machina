@@ -555,7 +555,7 @@ class TestAgentTypeLifecycle:
     def test_quantity_declaration_invalid_semantic_type_raises(self):
         with pytest.raises(ValueError, match="invalid semantic_type"):
             QuantityDeclaration(
-                path='x', shape=(1, 1), semantic_type='matrix',
+                path='x', shape=(1, 1), semantic_type='tensor',
                 default_value=0.0, lb=-1.0, ub=1.0,
                 description='test',
             )
