@@ -13,12 +13,10 @@ Usage:
     cost_expr  = descriptor(x=x_mx)
 """
 
+from machina.library import registry
 from machina.model.descriptor import FunctionDescriptor, SymbolDescriptor
 
 # Import library package to trigger all @register decorators.
-from . import (
-    library,  # noqa: F401
-    registry,
-)
+from . import library  # noqa: F401
 
 __all__ = ['FunctionDescriptor', 'SymbolDescriptor', 'registry']

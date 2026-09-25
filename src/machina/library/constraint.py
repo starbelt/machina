@@ -1,6 +1,13 @@
+"""
+Generic constraint factories: ``constraint.linear``.
+
+Importing this module registers it; ``import machina`` imports it through
+:mod:`machina.library`.
+"""
+
 import casadi as ca
 
-from machina.blocks.registry import register
+from machina.library.registry import register
 from machina.model.descriptor import FunctionDescriptor
 
 

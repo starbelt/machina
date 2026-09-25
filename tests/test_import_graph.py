@@ -32,7 +32,7 @@ HEAVY_DEPENDENCIES = ("networkx", "matplotlib", "pandas")
 
 # Loaded by ``import machina``, so the absence checks cannot pass on an import that did nothing.
 CORE = ("machina.compiler.problem", "machina.model.builder", "machina.solver.backend",
-        "machina.params.values", "machina.library")
+        "machina.params.values", "machina.library", "machina.library.registry")
 
 HOW_TO_FIND_THE_IMPORT = (
     "`python -X importtime -c \"import machina\"` shows which core module pulls it in")

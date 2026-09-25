@@ -1,5 +1,5 @@
 """
-Phase 1 tests for machina.blocks — Layer 2 foundation.
+Phase 1 tests for the factory registry and the descriptors — Layer 2 foundation.
 
 Sections
 --------
@@ -15,7 +15,8 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from machina.blocks import FunctionDescriptor, SymbolDescriptor, registry
+from machina.library import registry
+from machina.model import FunctionDescriptor, SymbolDescriptor
 from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
@@ -334,7 +335,7 @@ class TestRegistry:
 
     def test_duplicate_registration_raises(self):
         """Re-registering an existing name must raise ValueError."""
-        from machina.blocks.registry import register as reg_register
+        from machina.library.registry import register as reg_register
         with pytest.raises(ValueError, match="already registered"):
             @reg_register('cost.quadratic')
             def _duplicate():
