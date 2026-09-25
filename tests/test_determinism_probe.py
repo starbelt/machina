@@ -10,6 +10,7 @@ values -- the variable that makes a set-derived ordering change between runs.
 
 import filecmp
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -45,8 +46,32 @@ class TestTheProbe:
         load_probe().run(tmp_path)
         written = sorted(p.relative_to(tmp_path).as_posix()
                          for p in tmp_path.rglob("*") if p.is_file())
-        assert written == ["MANIFEST.json", "params/params.csv", "plant/f_system.casadi",
-                           "plant/g_system.casadi", "plant/plant_step.c"]
+        assert written == ["MANIFEST.json", "coverage/coverage_nlp.casadi",
+                           "coverage/names.json", "params/params.csv",
+                           "plant/f_system.casadi", "plant/g_system.casadi",
+                           "plant/plant_step.c"]
+
+    def test_every_stage_contributes_its_manifest_block(self, tmp_path):
+        probe = load_probe()
+        probe.run(tmp_path)
+        manifest = json.loads((tmp_path / "MANIFEST.json").read_text(encoding="utf-8"))
+        assert sorted(manifest) == sorted(stage for stage, _writer in probe.ARTIFACTS)
+
+    def test_the_coverage_nlp_is_a_fresh_function_with_the_declared_layout(self, tmp_path):
+        """The astro problem's NLP, serialised before any solver or derivative existed."""
+        import casadi as ca
+        load_probe().run(tmp_path)
+        names = json.loads((tmp_path / "coverage" / "names.json").read_text(encoding="utf-8"))
+        assert [v["name"] for v in names["variables"]] == [f"sat/{n}" for n in "pfghk"]
+        assert [p["name"] for p in names["parameters"]] == [
+            "sat/L", "sat/r_target", "sat/min_elevation", "sat/sigmoid_k"]
+        assert [c["name"] for c in names["constraints"]] == [
+            "sat/perigee_altitude", "sat/apogee_altitude"]
+        assert names["costs"] == ["neg_coverage"]
+        fn = ca.Function.deserialize(
+            (tmp_path / "coverage" / "coverage_nlp.casadi").read_text(encoding="utf-8"))
+        assert fn.name_in() == ["x", "p"] and fn.name_out() == ["f", "g"]
+        assert fn.size1_in(0) == 5 and fn.size1_out(1) == 2
 
     def test_two_runs_in_one_process_are_byte_identical(self, tmp_path):
         probe = load_probe()
