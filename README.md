@@ -21,10 +21,11 @@ with the build commands and the hard rules.
 
 ## Status
 
-Revived September 2026. The April 2026 code (solver backend, function library, agent types,
-universal-variable Kepler propagation, single-satellite coverage optimization; 369 tests) is
-intact under `src/machina/`. The restructure that merges in the icarus-dynamics component graph
-and params pipeline is in progress; see the Roadmap note in the vault.
+Revived September 2026. The solver backend (Phase 1), the component graph and params pipeline
+absorbed from icarus-dynamics (Phase 2), and the `Problem` compiler with the `astro` and `swapc`
+packs (Phase 3) are in; about 1150 tests run on Python 3.10 and 3.12 in CI, together with every
+example and a two-process determinism gate. Next are `study` (sweeps) and `report` (LaTeX and
+Markdown tables and equations with provenance); see the Roadmap note in the vault.
 
 ## Install
 
@@ -34,6 +35,7 @@ Requires Python 3.10+.
 python -m pip install -e ".[dev]"
 make test
 make lint
+make examples
 ```
 
 Extras: `viz` (NetworkX + matplotlib for the NLP graph tool), `study` (pandas for sweep tables),
@@ -41,46 +43,77 @@ Extras: `viz` (NetworkX + matplotlib for the NLP graph tool), `study` (pandas fo
 
 ## A first problem
 
+One component from the `astro` pack, one problem, one solve: the orbit that maximises smooth
+coverage of Washington DC over a 200–1600 km altitude box, starting from an ISS-like orbit.
+
 ```python
-import casadi as ca
-from machina.solver import SolverBackend
-from machina.blocks import registry
+import math
 
-solver = SolverBackend(verbose=False)          # solver="bonmin" for discrete variables
-xy = solver.add_variable("xy", 2, lb=-2.0, ub=2.0, initial_guess=0.0)
+from machina.astro import SingleSatCoverage      # importing a pack declares its signals and frames
+from machina.compiler import Problem
+from machina.model import Scope
 
-rosenbrock = registry.get("cost.rosenbrock")(a=1.0, b=100.0)   # a FunctionDescriptor
-solver.add_cost(rosenbrock(xy=xy), name="rosenbrock")
+R = 6378.137
+i, raan = math.radians(51.6), math.radians(240.0)              # ISS-like start that passes over DC
+sat = SingleSatCoverage(target_lat_deg=38.9, target_lon_deg=-77.0, n_sample_points=24,
+                        perigee_min_km=200.0, apogee_max_km=1600.0)
 
-solver.build()
-result = solver.solve()
-print(result.success, result.status, result["xy"], result.f_opt)
+prob = Problem([Scope("sat", [sat])], verbose=False)           # scopes give the paths sat/p, sat/f, ...
+prob.compile(overrides={                                       # roles and values resolve here; the tool never guesses
+    "sat/p": {"x0": R + 500.0, "lb": R + 200.0, "ub": R + 1600.0},
+    "sat/f": {"x0": 0.01, "lb": -0.3, "ub": 0.3},
+    "sat/g": {"x0": 0.0, "lb": -0.3, "ub": 0.3},
+    "sat/h": {"x0": math.tan(i / 2) * math.cos(raan), "lb": -1.5, "ub": 1.5},
+    "sat/k": {"x0": math.tan(i / 2) * math.sin(raan), "lb": -1.5, "ub": 1.5},
+})
+prob.add_cost(-prob.expr("sat/coverage_total").symbol, name="neg_coverage")   # the problem picks the objective
+
+res = prob.build().solve()
+print(res.status, res.iterations, "iterations")                # Solve_Succeeded 21 iterations
+print("coverage", round(-res.f_opt, 4))                        # 0.1639
+print("p =", round(res["sat/p"].item(), 3), "km, on the apogee bound")   # 7978.137 = R + 1600
 ```
 
-The backend is plugin-agnostic (IPOPT, bonmin, sqpmethod, fatrop) and works in physical units
-throughout: `scale=` on a variable or constraint conditions the problem without changing what you
-read back. Parameters carry stored values (`add_parameter(value=...)`, `set_parameter`), bounds
-can be edited or variables fixed after `build()`, `solve(warm_start=previous_result)` reuses the
-previous duals, and results give named access to shadow prices (`result.constraint("power").multiplier`),
-parameter sensitivities and the per-term cost breakdown.
+The component owns its physics: the modified equinoctial elements `p f g h k` as variables, the
+sample grid, target and sigmoid parameters, the produced `coverage_total` signal, the two
+altitude constraints in their well-conditioned squared form, and the scaling that makes the
+strict solve converge (the same problem at unit scale stops early at 0.126; see the vault's MEE
+Numerics note). The problem decides roles, values and the objective; every number it uses comes
+from a declared default with a provenance code, an override, or a params CSV, and a value with
+none of those is an error, not a guess. Results are in physical units with named access to
+shadow prices (`res.constraint("sat/apogee_altitude").multiplier`), bound multipliers, parameter
+sensitivities and the per-term cost breakdown; `solve(warm_start=previous)` reuses the duals.
 
-More in `examples/`: `least_squares.py` (matrix parameters), `flyby_goodput.py` (three-product
-goodput with a shared compute budget), `kepler_propagation.py` (universal-variable propagation
-across orbit regimes), `coverage_optimization.py` (the full agent + compiler stack).
+The examples in `examples/` go one step further each: `fleet_budget.py` is the file to copy when
+you write your own component (two payloads in scopes, a budget that reads both by absolute path,
+roles and provenance, the shadow price of the cap); `coverage_optimization.py` is the problem
+above with plots, the April recipe for comparison and the derived Keplerian elements;
+`kepler_propagation.py` propagates with the universal-variable solver across orbit regimes;
+`flyby_goodput.py` is a three-product goodput problem on a shared compute budget (the `swapc`
+pack); `least_squares.py` shows matrix parameters; `rosenbrock.py` and `rosenbrock_registry.py`
+use the solver backend directly, without and with the factory registry. All of them run headless
+(`make examples`).
 
 ## Package map
 
-| Path | Contents |
-|---|---|
-| `src/machina/solver/` | `SolverBackend` (CasADi `nlpsol` wrapper, MX), `SolutionResult`, public records, per-plugin options |
-| `src/machina/blocks/` | `FunctionDescriptor`, `SymbolDescriptor`, the factory registry, and the factory library (`cost`, `constraint`, `util`, `transforms`, `geometry`) |
-| `src/machina/agents/` | `AgentType` declare/build lifecycle and `SingleSatCoverage` |
-| `src/machina/compiler/` | `CompilerStub`: declare → assign roles → build → register → solve |
-| `src/machina/viz.py` | NLP graph drawing (needs the `viz` extra) |
-| `examples/`, `tests/` | runnable examples; pytest suite |
+| Path | Contents | Imported by `import machina`? |
+|---|---|---|
+| `src/machina/solver/` | `SolverBackend` (CasADi `nlpsol` wrapper, MX), `SolutionResult`, public records, per-plugin options, scaling, warm start | yes |
+| `src/machina/model/` | signal registry with frames, `Component`/`Declaration`/`Quantity`/`Constraint`/`Cost`/`Scope`, the `Builder` (SX for simulation, MX for the NLP), `FunctionDescriptor`/`SymbolDescriptor` | yes |
+| `src/machina/compiler/` | `Problem`: declare → roles → values → leaves → wire → register → build → solve | yes |
+| `src/machina/params/` | `param()` declarations, the provenance-tagged CSV, `machina params sync\|check`, injectable lint contract | yes |
+| `src/machina/library/` | the factory registry and the generic factories (`cost.*`, `constraint.linear`, `util.*`), numeric guards | yes (registers the generic factories) |
+| `src/machina/sim/`, `src/machina/codegen/` | RK4 step function; dense C export, manifest merge, layout blocks | yes |
+| `src/machina/astro/` | frames `eci/ecef/lvlh`, MEE/KOE transforms, universal-variable Kepler, elevation geometry, smooth coverage, `SingleSatCoverage` | no — importing it declares its signals and registers `transform.*`, `geometry.*`, `cost.smooth_coverage` |
+| `src/machina/swapc/` | goodput and latency factories for the thesis cost function (budget signals and components come with the first consumer) | no — importing it registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `util.ttp_computation` |
+| `src/machina/rigid/`, `src/machina/aero/` | frames `ned/frd`, rigid-body signals and quaternion kinematics (skeleton); placeholder | no |
+| `src/machina/report/` | planned (Phase 4): LaTeX/Markdown tables and equations of a compiled problem, with provenance | no |
+| `src/machina/viz.py` | dormant NLP-level graph view (needs the `viz` extra); a component-level graph with Mermaid/DOT export is planned | no |
+| `examples/`, `tests/`, `scripts/` | runnable examples; pytest suite; the determinism probe behind `make determinism` | — |
 
-The target layout after the restructure (core `model/`, `params/`, `sim/`, `codegen/`, `study/`,
-`report/`; packs `astro/`, `swapc/`, `rigid/`, `aero/`) is described in the vault Architecture note.
+`import machina` is the core only: no pack, no plotting library, nothing that needs an orbit to
+exist. Packs are imported explicitly by the problem that uses them, which is also what registers
+their factories and declares their signals; a test enforces this.
 
 ## Using machina from another repo
 
