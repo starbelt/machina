@@ -80,9 +80,15 @@ class TestTheProbe:
         assert same_tree(tmp_path / "a", tmp_path / "b") == []
 
     def test_two_processes_with_different_hash_seeds_are_byte_identical(self, tmp_path):
-        """The real gate, as ``make determinism`` runs it."""
+        """The real gate, as ``make determinism`` runs it.
+
+        This checkout's ``src`` goes first on ``PYTHONPATH`` so the subprocesses
+        build from the code under test, not from whichever machina is installed.
+        """
+        src = str(REPO / "src")
         for out, seed in (("a", "0"), ("b", "2718281")):
-            env = dict(os.environ, PYTHONHASHSEED=seed)
+            env = dict(os.environ, PYTHONHASHSEED=seed,
+                       PYTHONPATH=src + os.pathsep + os.environ.get("PYTHONPATH", ""))
             subprocess.run([sys.executable, str(PROBE), "--out", str(tmp_path / out)],
                            check=True, env=env, capture_output=True)
         assert same_tree(tmp_path / "a", tmp_path / "b") == []

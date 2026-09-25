@@ -45,6 +45,11 @@ def _import_packs():
     baseline both fixtures restore to. Declaration order is the layout ABI: rigid (2a)
     before astro (3a) before swapc (3b). Append here, never insert; the isort splits
     keep the linter from re-sorting them.
+
+    Called once below, when pytest loads this conftest -- before any test module is
+    collected -- so the order above is the order in every test process even though
+    test modules import packs at module level. The fixtures call it again; the
+    second call is a no-op (Python caches modules).
     """
     import machina.library  # noqa: F401  (registers the generic factories)
     import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
@@ -52,6 +57,10 @@ def _import_packs():
     import machina.astro  # noqa: F401  (declares eci/ecef/lvlh, coverage_total; 10 factories)
     # isort: split
     import machina.swapc  # noqa: F401  (registers the goodput and latency factories)
+
+
+if HAS_CASADI:
+    _import_packs()
 
 
 @pytest.fixture(autouse=True)
