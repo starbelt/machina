@@ -1,5 +1,8 @@
 """
-Phase 3a tests — coordinate transforms and their registration.
+Tests for the element-set transforms in ``machina.astro.transforms``:
+``transform.koe_to_mee``, ``transform.mee_to_koe`` and ``transform.mee_to_eci``.
+The universal-variable propagation factories in the same module are tested in
+``test_kepler.py`` beside this file.
 
 Sections
 --------

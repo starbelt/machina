@@ -1,5 +1,8 @@
 """
-Phase 2 tests for machina.swapc — Flyby-relevant function library.
+Tests for the swapc pack's factories: ``cost.sigmoid_goodput`` and
+``cost.aggregate_goodput`` (``machina.swapc.goodput``) and
+``util.ttp_computation`` (``machina.swapc.latency``), alone and wired into
+small NLPs.
 
 Sections
 --------
@@ -345,7 +348,8 @@ class TestFlyboyToyProblem:
     """
 
     @pytest.fixture(scope='class')
-    def result(self):
+    @classmethod
+    def result(cls):
         sigmoid = registry.get('cost.sigmoid_goodput')(k=0.1, t50=150.0)
         agg = registry.get('cost.aggregate_goodput')(
             per_product_func=sigmoid, n_products=2, weights=[0.7, 0.3]

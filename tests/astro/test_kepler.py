@@ -1,5 +1,8 @@
 """
-Phase 3b tests — Universal Kepler Solver and Stumpff functions.
+Tests for the universal-variable propagation factories in
+``machina.astro.transforms``: ``transform.stumpff_cs``,
+``transform.lagrange_coefficients``, ``transform.universal_kepler`` and
+``transform.propagate_universal``.
 
 Test classes
 ------------
@@ -11,22 +14,20 @@ TestPropagateUniversal       -- end-to-end (r0,v0,Δt)→(r,v): period, half-per
 
 import math
 
+import casadi as ca
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.requires_casadi
-
-import casadi as ca
-
 import machina.astro  # noqa: F401
 from machina.library import registry
+
+pytestmark = pytest.mark.requires_casadi
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MU = 398600.4418          # Earth GM [km³/s²]
-SQRT_MU = math.sqrt(MU)
 
 
 # ---------------------------------------------------------------------------

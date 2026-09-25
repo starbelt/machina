@@ -13,8 +13,11 @@ TestFlyboyIntegration      — end-to-end wiring check using the flyby problem
 """
 
 import casadi as ca
-import matplotlib
 import pytest
+
+# machina.viz imports networkx at module level; skip the file, not error, without the viz extra.
+pytest.importorskip("networkx")
+matplotlib = pytest.importorskip("matplotlib")
 
 matplotlib.use('Agg')  # non-interactive backend; must be set before pyplot import
 
@@ -23,7 +26,7 @@ from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
-pytestmark = pytest.mark.requires_casadi
+pytestmark = [pytest.mark.requires_casadi, pytest.mark.requires_networkx]
 
 
 # ---------------------------------------------------------------------------
