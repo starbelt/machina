@@ -1,7 +1,14 @@
+"""
+Generic constraint factories: ``constraint.linear``.
+
+Importing this module registers it; ``import machina`` imports it through
+:mod:`machina.library`.
+"""
+
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
-from machina.blocks.registry import register
+from machina.library.registry import register
+from machina.model.descriptor import FunctionDescriptor
 
 
 @register('constraint.linear')
@@ -11,10 +18,10 @@ def make_linear(*, n: int, coefficients: list) -> FunctionDescriptor:
 
     Computes the scalar dot product c^T x. The constraint direction and
     bound values are NOT part of this function — they are applied by the
-    agent type when registering with the solver. This separation keeps the
+    caller when registering with the solver. This separation keeps the
     function library pure math and lets the same linear form express
     equality constraints, upper bounds, or lower bounds depending on how
-    the agent wires it.
+    the caller wires it.
 
     Common uses in the flyby problem
     ---------------------------------
@@ -54,7 +61,7 @@ def make_linear(*, n: int, coefficients: list) -> FunctionDescriptor:
 
     Applying constraint semantics
     ------------------------------
-    This function returns an expression; the agent type decides what to do
+    This function returns an expression; the caller decides what to do
     with it. All three patterns below are valid:
 
         expr = linear(x=x_mx)

@@ -1,32 +1,35 @@
 """
-examples/rosenbrock_blocks.py
-------------------------------
-The Rosenbrock problem solved through the Layer 2 block library.
+examples/rosenbrock_registry.py
+--------------------------------
+The Rosenbrock problem solved through the factory registry.
 
     minimize  (a - xy[0])^2 + b*(xy[1] - xy[0]^2)^2
 
 Global minimum is at xy* = [a, a^2] = [1, 1] with f* = 0.
 
 Compare with examples/rosenbrock.py, which writes the objective expression
-by hand directly into the solver backend (Layer 1 only). This example instead:
+by hand directly into the solver backend. This example instead:
 
   1. Looks up the factory by name from the function registry.
   2. Calls the factory with configuration parameters to get a FunctionDescriptor.
   3. Calls the descriptor with MX variables to get an MX cost expression.
   4. Registers that expression with the solver backend as usual.
 
-The mathematical result is identical — the block library is purely additive.
+The mathematical result is identical — the registry is purely additive.
 What it changes is the assembly pattern: functions are named, reusable, and
-discoverable. This is the pattern that Layer 3 (agent types) and Layer 4
-(the YAML compiler) will use.
+discoverable. This shows the registry and a FunctionDescriptor called on MX
+symbols. A component's build() does not go through this path: it calls the
+make_* factories directly and composes at SX level with .function(...)
+(examples/fleet_budget.py writes a component).
 
 Run from the project root:
-    python examples/rosenbrock_blocks.py
+    python examples/rosenbrock_registry.py
 """
 
+import matplotlib
 import matplotlib.pyplot as plt
 
-from machina.blocks import registry
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
@@ -46,7 +49,7 @@ print(f"  Description: {rosenbrock.description}")
 print()
 
 # ---------------------------------------------------------------------------
-# 2. Set up the solver backend and rent a decision variable
+# 2. Set up the solver backend and add a decision variable
 # ---------------------------------------------------------------------------
 solver = SolverBackend(solver_opts={
     'ipopt.print_level': 5,
@@ -73,7 +76,7 @@ cost_expr = rosenbrock(xy=xy)
 solver.add_cost(cost_expr, name='rosenbrock')
 
 # ---------------------------------------------------------------------------
-# 4. Build and solve — identical to the Layer 1 approach from here on
+# 4. Build and solve — identical to examples/rosenbrock.py from here on
 # ---------------------------------------------------------------------------
 solver.build()
 result = solver.solve()
@@ -81,7 +84,7 @@ result = solver.solve()
 # ---------------------------------------------------------------------------
 # 5. Inspect results
 # ---------------------------------------------------------------------------
-print("\n--- Rosenbrock result (via block library) ---")
+print("\n--- Rosenbrock result (via the factory registry) ---")
 print(f"Converged:  {result.success}")
 print(f"xy*[0]    = {result['xy'][0]:.8f}  (expected 1.0)")
 print(f"xy*[1]    = {result['xy'][1]:.8f}  (expected 1.0)")
@@ -92,6 +95,7 @@ print(f"Iterations: {result.stats['iter_count']}")
 # 6. Visualize the NLP wiring
 # ---------------------------------------------------------------------------
 G = build_nlp_graph(solver)
-draw_nlp_graph(G, title='Rosenbrock NLP (via block library)')
+draw_nlp_graph(G, title='Rosenbrock NLP (via the factory registry)')
 plt.tight_layout()
-plt.show()
+if matplotlib.get_backend().lower() != "agg":
+    plt.show()

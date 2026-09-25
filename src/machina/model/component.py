@@ -8,7 +8,7 @@ out vectors, resolve dependencies and detect conflicts *before* anything is
 built. Only then does ``build()`` run with the symbols already sliced out.
 
 This is icarus-dynamics' ``Declaration`` with three additions from machina's
-April agent types:
+April 2026 prototype:
 
 ``quantities``
     Leaves the component **owns** rather than reads: an orbital element, a

@@ -8,13 +8,15 @@ geometry.elevation_angle    -- Elevation angle of satellite above ground target 
 
 Both functions use the spherical Earth approximation and snapshot geometry
 (Earth rotation is not modelled).  The target is treated as stationary in ECI.
+
+Importing this module registers both; ``import machina.astro`` imports it.
 """
 
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
-from machina.blocks.registry import register
 from machina.library.numerics import TINY
+from machina.library.registry import register
+from machina.model.descriptor import FunctionDescriptor
 
 # ---------------------------------------------------------------------------
 # geometry.ground_target_eci
@@ -50,7 +52,7 @@ def make_ground_target_eci(*, R_earth: float) -> FunctionDescriptor:
                                cos(lat)*sin(lon),
                                sin(lat)]
     Earth rotation is not modelled — the target is stationary in ECI.
-    For Phase 3c coverage geometry this is an adequate approximation.
+    For coverage geometry this is an adequate approximation.
     """
     lat = ca.SX.sym('lat')
     lon = ca.SX.sym('lon')

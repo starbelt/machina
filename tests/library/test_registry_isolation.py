@@ -7,8 +7,8 @@ The function registry is process-global; tests must not leak registrations.
 
 import pytest
 
-import machina.blocks.library  # noqa: F401  (registers the factory library)
-from machina.blocks import registry
+import machina.library  # noqa: F401  (registers the generic factories)
+from machina.library import registry
 
 pytestmark = pytest.mark.requires_casadi
 
@@ -51,7 +51,7 @@ class TestSnapshotRestore:
 class TestProvenance:
 
     def test_registered_in_names_the_module(self):
-        assert registry.registered_in('cost.rosenbrock') == 'machina.blocks.library.cost'
+        assert registry.registered_in('cost.rosenbrock') == 'machina.library.cost'
 
     def test_duplicate_error_names_both_sources(self):
         _register_probe()

@@ -1,16 +1,17 @@
 """
 examples/kepler_propagation.py
 -------------------------------
-Demo of the Phase 3b universal Kepler propagation functions.
+Demo of the astro pack's universal-variable Kepler propagation factories.
 
 Three demonstrations:
   1. Stumpff functions C(ψ) and S(ψ) — the mathematical engine underneath
      the universal Kepler solver.
 
-  2. Orbit propagation — three orbit classes in 3D:
+  2. Orbit propagation — four orbit classes in 3D:
        • ISS-like  LEO   (a = 6 778 km,  e = 0.001, i = 51.6°)
        • GEO             (a = 42 164 km, e = 0.000, i =  0.0°)
        • Molniya   HEO   (a = 26 560 km, e = 0.740, i = 63.4°)
+       • Hyperbolic flyby (a = -7 000 km, e = 2.000, i = 30.0°)
      Each orbit is traced by calling propagate_universal at many time steps,
      then plotted in ECI frame with Earth drawn to scale.
 
@@ -18,9 +19,10 @@ Three demonstrations:
      and report the position and velocity roundtrip error.  Demonstrates that
      the ca.rootfinder-based solver stays accurate over many orbits.
 
-All functions are pulled from the Layer 2 registry.  No solver backend, no
-agent types, no YAML — this is pure orbital mechanics evaluation, the same
-call pattern that Layer 3 agent types use internally.
+All functions come from the factory registry (importing machina.astro
+registers them).  No solver backend, no Problem — this is pure orbital
+mechanics evaluation: each factory's ca.Function called on numbers through
+``.function(...)``, the same functions a component composes at SX level.
 
 Run from the project root:
     python examples/kepler_propagation.py
@@ -29,21 +31,23 @@ Run from the project root:
 import math
 
 import casadi as ca
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3D projection)
 
-from machina.blocks import registry
+import machina.astro  # noqa: F401
+from machina.library import registry
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-MU    = 398600.4418     # Earth GM [km³/s²]
-RE    = 6371.0          # Earth mean radius [km]
+MU      = 398600.4418   # Earth GM [km³/s²]
+R_EARTH = 6378.137      # Earth equatorial radius [km], as in the rest of machina
 
 # ---------------------------------------------------------------------------
-# Grab the four Phase 3b functions from the registry
+# Grab four astro factories from the registry
 # ---------------------------------------------------------------------------
 
 stumpff_fd  = registry.get('transform.stumpff_cs')()
@@ -51,14 +55,14 @@ prop_fd     = registry.get('transform.propagate_universal')(mu=MU)
 koe_to_mee  = registry.get('transform.koe_to_mee')()
 mee_to_eci  = registry.get('transform.mee_to_eci')(mu=MU)
 
-print("Phase 3b functions loaded from registry:")
+print("Factories from machina.astro:")
 for fd in (stumpff_fd, prop_fd, koe_to_mee, mee_to_eci):
     print(f"  {fd}")
 print()
 
 
 # ---------------------------------------------------------------------------
-# Helper: KOE → ECI initial state (links Phase 3a transforms with Phase 3b)
+# Helper: KOE → ECI initial state (the MEE transforms feed the propagator)
 # ---------------------------------------------------------------------------
 
 def koe_to_initial_state(a, e, i_deg, raan_deg=0.0, aop_deg=0.0, nu_deg=0.0):
@@ -145,7 +149,7 @@ orbits = [
     ("ISS  (LEO)",     6778.0,  0.001, 51.6, 0.0,   0.0, 0.0, 'royalblue',  300, None),
     ("GEO",           42164.0,  0.000,  0.0, 0.0,   0.0, 0.0, 'darkorange', 200, None),
     ("Molniya (HEO)", 26560.0,  0.740, 63.4, 0.0, 270.0, 0.0, 'seagreen',   400, None),
-    # Hyperbolic flyby: a < 0, e > 1.  rp = a*(1-e) = 7000 km (~629 km alt).
+    # Hyperbolic flyby: a < 0, e > 1.  rp = a*(1-e) = 7000 km (~622 km alt).
     # Asymptote half-angle = arccos(-1/e) = 120 deg; arc covers ±100 deg (r < 35000 km).
     ("Hyperbolic flyby", -7000.0, 2.0, 30.0, 0.0, 0.0, 0.0, 'orchid', 300, 7200),
 ]
@@ -156,14 +160,14 @@ ax3d = fig2.add_subplot(111, projection='3d')
 # Draw Earth sphere
 u_e = np.linspace(0, 2*np.pi, 60)
 v_e = np.linspace(0, np.pi, 30)
-xe = RE * np.outer(np.cos(u_e), np.sin(v_e))
-ye = RE * np.outer(np.sin(u_e), np.sin(v_e))
-ze = RE * np.outer(np.ones_like(u_e), np.cos(v_e))
+xe = R_EARTH * np.outer(np.cos(u_e), np.sin(v_e))
+ye = R_EARTH * np.outer(np.sin(u_e), np.sin(v_e))
+ze = R_EARTH * np.outer(np.ones_like(u_e), np.cos(v_e))
 ax3d.plot_surface(xe, ye, ze, color='deepskyblue', alpha=0.25, linewidth=0, zorder=0)
 
 # Equatorial circle outline
 theta = np.linspace(0, 2*np.pi, 300)
-ax3d.plot(RE*np.cos(theta), RE*np.sin(theta), np.zeros_like(theta),
+ax3d.plot(R_EARTH*np.cos(theta), R_EARTH*np.sin(theta), np.zeros_like(theta),
           color='deepskyblue', linewidth=0.7, alpha=0.5)
 
 for label, a, e, i_deg, raan_deg, aop_deg, nu_deg, color, n_pts, arc_s in orbits:
@@ -195,11 +199,11 @@ for label, a, e, i_deg, raan_deg, aop_deg, nu_deg, color, n_pts, arc_s in orbits
     if e < 1:
         T = orbit_period(a)
         print(f"  {label:<24} a={a:>7.0f} km  e={e:.3f}  "
-              f"i={i_deg:>5.1f} deg  T={T/60:>7.2f} min   alt_p~{rp-RE:.0f} km")
+              f"i={i_deg:>5.1f} deg  T={T/60:>7.2f} min   alt_p~{rp-R_EARTH:.0f} km")
     else:
         v_inf = math.sqrt(-MU / a)   # hyperbolic excess speed
         print(f"  {label:<24} a={a:>7.0f} km  e={e:.1f}    "
-              f"i={i_deg:>5.1f} deg  v_inf={v_inf:.2f} km/s  alt_p~{rp-RE:.0f} km")
+              f"i={i_deg:>5.1f} deg  v_inf={v_inf:.2f} km/s  alt_p~{rp-R_EARTH:.0f} km")
 
 print()
 
@@ -246,7 +250,7 @@ for n in n_periods:
     dr = np.linalg.norm(r2 - r0) * 1e3   # m
     dv = np.linalg.norm(v2 - v0) * 1e6   # mm/s
     r_errors.append(dr); v_errors.append(dv)
-    print(f"  {n:>8.2f}  {dt_fwd/60:>10.1f}  {dr:>12.4f}  {dv:>13.6f}")
+    print(f"  {n:>8.2f}  {dt_fwd/60:>10.1f}  {dr:>12.2e}  {dv:>13.2e}")
 
 print()
 
@@ -274,7 +278,8 @@ for ax, vals, ylabel, title, color, marker in [
 fig3.tight_layout()
 
 # ---------------------------------------------------------------------------
-# Show all figures
+# Show all figures (skipped under a non-interactive backend such as MPLBACKEND=Agg)
 # ---------------------------------------------------------------------------
 
-plt.show()
+if matplotlib.get_backend().lower() != "agg":
+    plt.show()

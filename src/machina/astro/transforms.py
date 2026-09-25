@@ -11,6 +11,8 @@ transform.lagrange_coefficients -- Lagrange f/g coefficients given universal ano
 transform.universal_kepler    -- Solve universal Kepler equation for χ (ca.rootfinder)
 transform.propagate_universal -- Two-body propagation: (r₀, v₀, Δt) → (r, v)
 
+Importing this module registers all seven; ``import machina.astro`` imports it.
+
 Modified Equinoctial Elements (MEE)
 ------------------------------------
 MEE avoid the singularities of classical KOE at circular (e→0) and equatorial
@@ -38,9 +40,9 @@ Walker, M.J.H., Ireland, B., Owens, J. (1985). A Set of Modified Equinoctial
 
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
-from machina.blocks.registry import register
-from machina.library.numerics import EPS, TINY
+from machina.library.numerics import EPS, TINY, safe_sqrt
+from machina.library.registry import register
+from machina.model.descriptor import FunctionDescriptor
 
 # ---------------------------------------------------------------------------
 # transform.koe_to_mee
@@ -92,6 +94,10 @@ def make_mee_to_koe() -> FunctionDescriptor:
 
     Notes
     -----
+    - Display only (hard rule 2): derived elements never enter a cost or constraint.
+      The square roots are guarded (rule 3) so e and i have a finite Jacobian at
+      e = 0 / i = 0, but Ω and ω are undefined there and their atan2 rows are NaN
+      in the Jacobian; do not differentiate this function inside an NLP.
     - For circular orbits (e=0): ω is mathematically undefined (returned as 0).
     - For equatorial orbits (i=0): Ω is mathematically undefined (returned as 0).
     - ν = L - Ω - ω may land outside [0, 2π); normalise in post-processing
@@ -101,9 +107,9 @@ def make_mee_to_koe() -> FunctionDescriptor:
     p, f, g, h, k, L = (mee[0], mee[1], mee[2],
                          mee[3], mee[4], mee[5])
 
-    e = ca.sqrt(f ** 2 + g ** 2)
+    e = safe_sqrt(f ** 2 + g ** 2)
     a = p / (1 - e ** 2)
-    inc = 2 * ca.atan(ca.sqrt(h ** 2 + k ** 2))
+    inc = 2 * ca.atan(safe_sqrt(h ** 2 + k ** 2))
     raan = ca.atan2(k, h)
     # ω = atan2(g·h − f·k,  f·h + g·k)
     aop = ca.atan2(g * h - f * k, f * h + g * k)
@@ -379,7 +385,7 @@ def make_universal_kepler(
       is present in the NLP.
     - For highly eccentric orbits (e > 0.9) or very long propagation arcs,
       the circular-orbit initial guess may require more Newton iterations.
-      No issues expected for near-circular flyby orbits (Phase 3b scope).
+      No issues expected for the near-circular flyby orbits this pack targets.
     """
     stumpff_fd = make_stumpff_cs()
     sqrt_mu = ca.sqrt(mu)

@@ -7,17 +7,14 @@ problem mixes p ~ 7000 km with elements of order 1 and altitude constraints of
 order 7000^2. Unscaled and strict it ends in ``Invalid_Number_Detected``; the
 April workaround (``acceptable_tol=1e-2``) stops early at f = -0.126. Scaled,
 the same defaults converge strictly to f = -0.164 with the apogee bound active.
+The coverage oracles live in
+``tests/astro/test_single_sat_coverage.py::TestOracles``.
 """
-
-import math
-import warnings
 
 import casadi as ca
 import numpy as np
 import pytest
 
-from machina.agents import SingleSatCoverage
-from machina.compiler.compiler_stub import CompilerStub
 from machina.solver import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
@@ -100,65 +97,3 @@ class TestScalingIsTransparent:
             res = b.solve()
             assert res.success
             np.testing.assert_allclose([res["v"][0], res["w"][0]], [2.0, 300.0], rtol=1e-5)
-
-
-class TestCoverageProblem:
-    """The real motivating case, through the compiler stub's ``scale`` overrides."""
-
-    MU, R_EARTH = 398600.4418, 6378.137
-
-    def compile(self, solver_opts, scaled):
-        i, raan = math.radians(51.6), math.radians(240.0)
-        h0, k0 = math.tan(i / 2) * math.cos(raan), math.tan(i / 2) * math.sin(raan)
-        agent = SingleSatCoverage("sat", {
-            "n_sample_points": 24,
-            "ground_target": {"lat_deg": 38.9, "lon_deg": -77.0},
-            "coverage": {"min_elevation_deg": 10.0, "sigmoid_k": 20.0},
-            "altitude_bounds": {"perigee_min_km": 200.0, "apogee_max_km": 1600.0},
-            "constants": {"mu": self.MU, "R_earth": self.R_EARTH},
-        })
-        compiler = CompilerStub(solver=SolverBackend(verbose=False, solver_opts=solver_opts))
-        compiler.add_agent(agent)
-        R = self.R_EARTH
-        overrides = {
-            "sat/orbital/p": {"value": R + 500.0, "lb": R + 200.0, "ub": R + 1600.0},
-            "sat/orbital/f": {"value": 0.01, "lb": -0.30, "ub": 0.30},
-            "sat/orbital/g": {"value": 0.0, "lb": -0.30, "ub": 0.30},
-            "sat/orbital/h": {"value": h0, "lb": -1.5, "ub": 1.5},
-            "sat/orbital/k": {"value": k0, "lb": -1.5, "ub": 1.5},
-        }
-        if scaled:
-            overrides["sat/orbital/p"]["scale"] = 7000.0
-            overrides["sat/perigee_altitude"] = {"scale": 7000.0**2}
-            overrides["sat/apogee_altitude"] = {"scale": 7000.0**2}
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            compiler.compile(overrides=overrides)
-        compiler.add_cost(-compiler.resolve("sat", "coverage/total").symbol, name="neg_coverage")
-        compiler.build_solver()
-        return compiler
-
-    def test_april_recipe_is_unchanged_at_unit_scale(self):
-        """Regression oracle for the unscaled path: same stop point as April."""
-        compiler = self.compile({"ipopt.tol": 1e-4, "ipopt.acceptable_tol": 1e-2,
-                                 "ipopt.acceptable_iter": 3}, scaled=False)
-        res = compiler.solve()
-        assert res.status == "Solved_To_Acceptable_Level"
-        assert res.iterations == 13
-        np.testing.assert_allclose(res.f_opt, -0.12583632, atol=1e-7)
-
-    def test_unscaled_strict_solve_fails(self):
-        res = self.compile({}, scaled=False).solve()
-        assert not res.success
-        assert res.status == "Invalid_Number_Detected"
-
-    def test_scaled_strict_solve_converges_to_the_apogee_bound(self):
-        res = self.compile({}, scaled=True).solve()
-        assert res.status == "Solve_Succeeded"
-        np.testing.assert_allclose(res.f_opt, -0.16394, atol=1e-4)
-        np.testing.assert_allclose(res["sat/orbital/p"], [self.R_EARTH + 1600.0], rtol=1e-6)
-        assert res.bound_multiplier("sat/orbital/p")[0] > 0.0
-        # Reported in physical units (km^2). Feasible to the solver tolerance,
-        # which applies to the scaled row, hence the division.
-        apogee = res.constraint("sat/apogee_altitude")
-        assert apogee.value[0] / 7000.0**2 >= -1e-7

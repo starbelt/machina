@@ -1,24 +1,25 @@
 """
 examples/least_squares.py
 --------------------------
-A simple least-squares problem using the Layer 2 block library.
+A simple least-squares problem using the cost.least_squares factory from the registry.
 
     minimize  0.5 * ||Ax - b||^2
 
 A (4×2) and b (4-vector) are fixed parameters; x (2-vector) is the decision
 variable. A is registered as a matrix-valued parameter using the (rows, cols)
-tuple form of add_parameter introduced in Layer 1 v2.
+tuple form of SolverBackend.add_parameter.
 
-Compare with examples/rosenbrock_blocks.py for the basic block-library pattern.
+Compare with examples/rosenbrock_registry.py for the basic registry pattern.
 
 Run from the project root:
     python examples/least_squares.py
 """
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from machina.blocks import registry
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
@@ -32,7 +33,7 @@ A_data = np.array([[1.0, 1.0],
 b_data = np.array([1.0, 2.0, 3.0, 4.0])
 
 # ---------------------------------------------------------------------------
-# 1. Look up and configure the block
+# 1. Look up and configure the factory
 # ---------------------------------------------------------------------------
 least_squares = registry.get('cost.least_squares')(m=4, n=2)
 print(f"Function: {least_squares}")
@@ -54,7 +55,7 @@ b = solver.add_parameter('b', 4)
 x = solver.add_variable('x', 2, initial_guess=0.0)
 
 # ---------------------------------------------------------------------------
-# 3. Wire the block and build
+# 3. Call the descriptor on the MX symbols and build
 # ---------------------------------------------------------------------------
 cost_expr = least_squares(A=A, b=b, x=x)
 solver.add_cost(cost_expr, name='least_squares_cost')
@@ -82,6 +83,7 @@ print(f"Iterations: {result.stats['iter_count']}")
 # 6. Visualize the NLP wiring
 # ---------------------------------------------------------------------------
 G = build_nlp_graph(solver)
-draw_nlp_graph(G, title='Least Squares NLP (via block library)')
+draw_nlp_graph(G, title='Least Squares NLP (via the factory registry)')
 plt.tight_layout()
-plt.show()
+if matplotlib.get_backend().lower() != "agg":
+    plt.show()

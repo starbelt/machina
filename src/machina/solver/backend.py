@@ -166,7 +166,7 @@ class SolverBackend:
     This class owns all CasADi symbolic state and manages the mapping between
     named variables and their positions in the flat global decision vector.
     It knows nothing about orbital mechanics, mission design, or problem
-    structure — that knowledge lives in the blocks and agents above it.
+    structure — that knowledge lives in the components above it.
 
     NLP form
     --------

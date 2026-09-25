@@ -24,6 +24,8 @@ jobs:
         run: |
           python -c "import casadi as ca; print(ca.__version__, {n: ca.has_nlpsol(n) for n in ('ipopt', 'bonmin', 'sqpmethod', 'fatrop')})"
       - run: python -m pytest -rs
+      - name: Examples run headless
+        run: make examples
       - name: Params fixture table passes machina params check
         run: make check-params
       - name: Two processes build byte-identical artifacts

@@ -1,8 +1,9 @@
 """
-Function registry for the block library.
+Function registry: factories by name.
 
 Usage:
-    from machina.blocks import registry
+    from machina.library import registry
+    from machina.model import FunctionDescriptor
 
     # Register a factory (typically done via decorator in library modules):
     @registry.register('cost.my_function')
@@ -18,8 +19,10 @@ Usage:
 
 The registry is process-global. Tests isolate themselves with
 ``snapshot()`` / ``restore()``; ``clear()`` exists for the same purpose.
-Library modules register at import time, so clearing does not bring their
-factories back on a later import (Python caches modules): restore a snapshot.
+Factory modules register at import time -- ``machina.library`` the generic
+ones, each pack its own when it is imported -- so clearing does not bring
+their factories back on a later import (Python caches modules): restore a
+snapshot.
 """
 
 from collections.abc import Callable
@@ -61,7 +64,11 @@ def get(name: str) -> Callable:
         available = ', '.join(sorted(_registry.keys()))
         raise KeyError(
             f"Registry: '{name}' not found. "
-            f"Available factories: [{available}]"
+            f"Available factories: [{available}]. "
+            "Pack factories register when their pack is imported: "
+            "`import machina.astro` (transform.*, geometry.*, cost.smooth_coverage), "
+            "`import machina.swapc` (cost.sigmoid_goodput, cost.aggregate_goodput, "
+            "util.ttp_computation)."
         )
     return _registry[name]
 
