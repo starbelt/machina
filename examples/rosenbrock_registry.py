@@ -8,7 +8,7 @@ The Rosenbrock problem solved through the factory registry.
 Global minimum is at xy* = [a, a^2] = [1, 1] with f* = 0.
 
 Compare with examples/rosenbrock.py, which writes the objective expression
-by hand directly into the solver backend (Layer 1 only). This example instead:
+by hand directly into the solver backend. This example instead:
 
   1. Looks up the factory by name from the function registry.
   2. Calls the factory with configuration parameters to get a FunctionDescriptor.
@@ -17,13 +17,16 @@ by hand directly into the solver backend (Layer 1 only). This example instead:
 
 The mathematical result is identical — the registry is purely additive.
 What it changes is the assembly pattern: functions are named, reusable, and
-discoverable. It is the pattern a component's build() uses to compose the
-physics it declares (examples/fleet_budget.py writes a component).
+discoverable. This shows the registry and a FunctionDescriptor called on MX
+symbols. A component's build() does not go through this path: it calls the
+make_* factories directly and composes at SX level with .function(...)
+(examples/fleet_budget.py writes a component).
 
 Run from the project root:
     python examples/rosenbrock_registry.py
 """
 
+import matplotlib
 import matplotlib.pyplot as plt
 
 from machina.library import registry
@@ -46,7 +49,7 @@ print(f"  Description: {rosenbrock.description}")
 print()
 
 # ---------------------------------------------------------------------------
-# 2. Set up the solver backend and rent a decision variable
+# 2. Set up the solver backend and add a decision variable
 # ---------------------------------------------------------------------------
 solver = SolverBackend(solver_opts={
     'ipopt.print_level': 5,
@@ -73,7 +76,7 @@ cost_expr = rosenbrock(xy=xy)
 solver.add_cost(cost_expr, name='rosenbrock')
 
 # ---------------------------------------------------------------------------
-# 4. Build and solve — identical to the Layer 1 approach from here on
+# 4. Build and solve — identical to examples/rosenbrock.py from here on
 # ---------------------------------------------------------------------------
 solver.build()
 result = solver.solve()
@@ -94,4 +97,5 @@ print(f"Iterations: {result.stats['iter_count']}")
 G = build_nlp_graph(solver)
 draw_nlp_graph(G, title='Rosenbrock NLP (via the factory registry)')
 plt.tight_layout()
-plt.show()
+if matplotlib.get_backend().lower() != "agg":
+    plt.show()

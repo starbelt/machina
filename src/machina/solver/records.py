@@ -1,7 +1,7 @@
 """
 Read-only records describing what has been registered with a ``SolverBackend``.
 
-These are the public introspection surface of Layer 1. The viz tool, the
+These are the public introspection surface of the solver backend. The viz tool, the
 compiler and (later) the report and study packages read these instead of the
 backend's internal state. Records are snapshots: they are rebuilt on every
 accessor call and reflect the *current* bounds, guesses and parameter values

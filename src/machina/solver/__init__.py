@@ -1,4 +1,4 @@
-"""Layer 1: solver backend (CasADi ``nlpsol`` wrapper), records and result packaging."""
+"""Solver backend (CasADi ``nlpsol`` wrapper), records and result packaging."""
 
 from machina.solver.backend import SolverBackend
 from machina.solver.errors import SolverError

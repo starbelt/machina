@@ -33,7 +33,7 @@ def make_sum(*, n_terms: int) -> FunctionDescriptor:
     Notes
     -----
     This function is a simple wrapper around ca.sum1 for semantic clarity.
-    An agent could write ca.sum1(terms) directly, but using util.sum makes
+    A caller could write ca.sum1(terms) directly, but using util.sum makes
     the intent explicit and the computation appear in the function registry
     for introspection.
     """

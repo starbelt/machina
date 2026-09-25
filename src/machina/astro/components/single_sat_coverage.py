@@ -2,8 +2,8 @@
 Single-satellite coverage of one fixed ground target, in modified equinoctial
 elements.
 
-April's ``SingleSatCoverage`` agent (deleted in Phase 3b), ported to the Phase 2
-``Component`` API. The physics is unchanged: the true longitude ``L`` is
+The April 2026 prototype's ``SingleSatCoverage`` (deleted in Phase 3b), ported
+to the ``Component`` API. The physics is unchanged: the true longitude ``L`` is
 sampled at ``N`` equally-spaced points across ``[0, 2*pi)``, each sample is
 converted to ECI, the elevation angle above the target is taken, and a
 sigmoid maps elevation to a ``[0, 1]`` indicator. The mean over the samples
@@ -17,12 +17,12 @@ Three things changed in the port, all of them rules the vault records:
   gone for a different reason: its shape depends on ``N``, and a registry
   signal has one fixed shape.
 * ``n_sample_points`` defaults to **24**, not April's 72. 24 is the
-  documented convergence finding; the 72 in the agent contradicted it.
+  documented convergence finding; the 72 in the April code contradicted it.
 * The component declares **no costs**. Coverage is a value to maximise, so
   the problem adds ``-coverage_total`` itself and owns the sign and the
   weight (Decision Log #20, #34).
 
-``mu`` and ``R_earth`` are factory parameters, baked into the block factories
+``mu`` and ``R_earth`` are factory parameters, baked into the astro factories
 at construction, never runtime inputs. Distances are kilometres throughout, a
 recorded decision -- the MEE factories are written in km and the constraint
 scaling below is tuned for them.
@@ -150,15 +150,17 @@ class SingleSatCoverage(Component):
                 Quantity(
                     "h", unit="1",
                     doc="MEE inclination vector x-component, tan(i/2) cos(RAAN). The bounds "
-                        "[-1.5, 1.5] cover inclinations 0-123 deg; do not extend them past "
-                        "+-2, where the Hessian goes ill-conditioned",
+                        "[-1.5, 1.5] on h and k cover inclinations up to 112.6 deg at any RAAN "
+                        "(129.5 deg at the box corners); do not extend them past +-2, where "
+                        "the Hessian goes ill-conditioned",
                     role=Role.FLEXIBLE, default_role=Role.VARIABLE,
                     default=math.tan(math.radians(51.6) / 2.0), lb=-1.5, ub=1.5,
                     provenance="A", source="i = 51.6 deg, RAAN = 0; bounds per Rule 5"),
                 Quantity(
                     "k", unit="1",
                     doc="MEE inclination vector y-component, tan(i/2) sin(RAAN). The bounds "
-                        "[-1.5, 1.5] cover inclinations 0-123 deg",
+                        "[-1.5, 1.5] on h and k cover inclinations up to 112.6 deg at any RAAN "
+                        "(129.5 deg at the box corners)",
                     role=Role.FLEXIBLE, default_role=Role.VARIABLE,
                     default=0.0, lb=-1.5, ub=1.5,
                     provenance="A", source="i = 51.6 deg, RAAN = 0; bounds per Rule 5"),

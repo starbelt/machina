@@ -1,7 +1,7 @@
 """
 examples/flyby_goodput.py
 --------------------------
-Simplified flyby goodput optimization — manually wired, no agent type.
+Simplified flyby goodput optimization — wired by hand on a SolverBackend, without Problem.
 
 Problem
 -------
@@ -38,19 +38,20 @@ Objective
     maximize  sum_i( weights[i] * G(TTP_i) )
     where G(ttp) = 1 / (1 + exp(k * (ttp - t50)))
 
-This example uses the full Layer 2 pipeline:
+This example calls four registry factories (the swapc pack's and the generic ones):
     util.ttp_computation   — assembles TTP from delay components
     cost.sigmoid_goodput   — per-product timeliness value
     cost.aggregate_goodput — weighted sum across all products
     constraint.linear      — enforces the compute budget constraint
 
-This is the kind of wiring that a Layer 3 agent type will automate.
+`Problem` with a component does this wiring; see fleet_budget.py.
 
 Run from the project root:
     python examples/flyby_goodput.py
 """
 
 import casadi as ca
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -72,7 +73,7 @@ SIGMOID_K      = 0.08                  # 1/s — goodput decay rate
 SIGMOID_T50    = 200.0                 # s   — TTP at which goodput = 0.5
 
 # ---------------------------------------------------------------------------
-# 1. Build the function library components
+# 1. Configure the factories
 # ---------------------------------------------------------------------------
 
 # TTP assembly function: ttp_i = obs_delay_i + proc_time_i (2 components)
@@ -100,10 +101,11 @@ budget_constraint = registry.get('constraint.linear')(
 )
 
 # ---------------------------------------------------------------------------
-# 2. Set up the solver backend and rent decision variables
+# 2. Set up the solver backend and add the decision variables
 # ---------------------------------------------------------------------------
 solver = SolverBackend(solver_opts={
     'ipopt.print_level': 0,   # silence IPOPT — we print our own summary below
+    'ipopt.sb': 'yes',        # and its startup banner
     'print_time': False,
 })
 
@@ -194,4 +196,5 @@ print(f"Solver iterations: {result.stats['iter_count']}")
 G = build_nlp_graph(solver)
 draw_nlp_graph(G, title='Flyby goodput NLP')
 plt.tight_layout()
-plt.show()
+if matplotlib.get_backend().lower() != "agg":
+    plt.show()

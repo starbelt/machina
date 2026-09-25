@@ -7,7 +7,7 @@ physics as SX ca.Functions whose arguments carry the declared names. It never
 touches a solver: the Problem picks each quantity's role and value, wires the
 graph in MX and owns the objective. Two payloads share a power cap here:
 
-    maximise  50 (d_a + d_b) - 0.1 (d_a^2 + d_b^2)   s.t.  100 (d_a + d_b) <= limit
+    minimise  -50 (d_a + d_b) + 0.1 (d_a^2 + d_b^2)   s.t.  100 (d_a + d_b) <= limit
 
 At limit = 150 W: d_a = d_b = 0.75, f* = -74.8875, d f*/d limit = -0.4985 per W.
 Run from the project root:  python examples/fleet_budget.py
@@ -33,6 +33,7 @@ class Payload(Component):
         # No symbols here: the Problem reads this interface before anything is built.
         return Declaration(
             quantities=(
+                # provenance: D documented, P physics, E estimate, A assumption, M measured.
                 # FLEXIBLE: no opinion -- a variable by default; compile(roles=...) can make
                 # it a swept parameter or a fixed constant without editing this file.
                 Quantity("duty", unit="1", role=Role.FLEXIBLE, default_role=Role.VARIABLE,
@@ -48,8 +49,12 @@ class Payload(Component):
         )
 
     def build(self, helpers):
-        # Inputs are bound by name, so the SX symbols carry the declared names.
+        # Inputs are bound by the ca.Function input names (the list after the outputs); they
+        # must match the declared names, and their order is free.
         duty, peak_power = ca.SX.sym("duty"), ca.SX.sym("peak_power")
+        # The contract: keys "g" = produced signals, "h" = constraints, "J" = costs ("f" = state
+        # derivatives, unused here). Each Function's outputs are matched by position to that
+        # kind's declaration order (produces=("power", "rate") -> [power, rate]).
         return {
             "g": ca.Function("payload_g", [duty, peak_power], [peak_power * duty, 50.0 * duty],
                              ["duty", "peak_power"], ["power", "rate"]),
@@ -64,6 +69,8 @@ class FleetBudget(Component):
         return Declaration(
             # (local name, path): "/a/power" reaches into scope a -- cross-instance coupling.
             algebraic=(("power_a", "/a/power"), ("power_b", "/b/power")),
+            # PARAMETER: held fixed in the solve but symbolic, so the result can report
+            # d f*/d limit (sensitivity).
             quantities=(Quantity("limit", unit="W", role=Role.PARAMETER, default=150.0,
                                  doc="Fleet power cap", provenance="D", source="bus spec"),),
             constraints=(Constraint("margin", lb=0.0, doc="limit - total power >= 0"),),

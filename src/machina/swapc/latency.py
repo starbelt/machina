@@ -2,8 +2,9 @@
 Latency factory: ``util.ttp_computation`` sums the delay stages of a data
 product's time to product (TTP).
 
-The registered name keeps its ``util.`` prefix. Importing this module registers
-the factory; ``import machina.swapc`` imports it.
+The registered name keeps its ``util.`` prefix: registered names are a stable
+ABI. Importing this module registers the factory; ``import machina.swapc``
+imports it.
 """
 
 import casadi as ca
@@ -40,10 +41,11 @@ def make_ttp_computation(*, n_components: int) -> FunctionDescriptor:
     with n_components equal to the number of delay stages that are
     relevant to your problem.
 
-    The input is a single stacked vector of all delays. The agent type is
-    responsible for assembling this vector from its individual components,
-    which may be decision variables, fixed constants, or MX expressions
-    computed from other functions. Use ca.vertcat() to assemble the vector
+    The input is a single stacked vector of all delays. The caller (a
+    component's build(), or a hand-wired script) is responsible for
+    assembling this vector from its individual components, which may be
+    decision variables, fixed constants, or MX expressions computed from
+    other functions. Use ca.vertcat() to assemble the vector
     before calling this function.
 
     Factory parameters
@@ -60,7 +62,7 @@ def make_ttp_computation(*, n_components: int) -> FunctionDescriptor:
                                        recommended). The order of elements
                                        does not affect the result (addition
                                        is commutative), but should be
-                                       consistent with how the agent builds
+                                       consistent with how the caller builds
                                        the vector.
     Output
         ttp : (1, 1)  — scalar total TTP in the same units as the inputs.
@@ -100,8 +102,8 @@ def make_ttp_computation(*, n_components: int) -> FunctionDescriptor:
     Notes
     -----
     This function is intentionally trivial (it is just ca.sum1). Its value
-    is semantic clarity and consistent naming in the agent assembly code,
-    not computational complexity. An agent could write ca.sum1(delays)
+    is semantic clarity and consistent naming in the caller's assembly code,
+    not computational complexity. A caller could write ca.sum1(delays)
     directly, but using util.ttp_computation makes the intent explicit and
     the computation appear in the function registry for introspection.
     """

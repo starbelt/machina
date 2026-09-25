@@ -2,8 +2,9 @@
 Coverage factory: ``cost.smooth_coverage``, the sigmoid that maps an elevation
 angle to a coverage indicator in ``(0, 1)``.
 
-The registered name keeps its ``cost.`` prefix. Importing this module
-registers the factory; ``import machina.astro`` imports it.
+The registered name keeps its ``cost.`` prefix: registered names are a stable
+ABI. Importing this module registers the factory; ``import machina.astro``
+imports it.
 """
 
 import casadi as ca

@@ -18,10 +18,12 @@ Three demonstrations:
      ``Problem``: maximize the mean coverage fraction over DC. Starting from an
      ISS-like orbit (500 km, f = 0.01, 51.6 deg, RAAN = 240 deg), IPOPT adjusts
      p, f, g, h, k inside a 200-1600 km altitude box, |f|, |g| <= 0.3 and
-     |h|, |k| <= 1.5 (inclinations up to ~123 deg). The component declares its
-     own scaling (p / R_earth, altitude rows / R_earth^2), so the strict IPOPT
-     defaults converge. April's recipe -- unit scale, acceptable_tol = 1e-2 --
-     runs beside it for comparison.
+     |h|, |k| <= 1.5 (tan(i/2) = sqrt(h^2 + k^2): inclinations up to 112.6 deg
+     at any RAAN, 129.5 deg at the corners of the box). The component declares
+     its own scaling (p / R_earth, altitude rows / R_earth^2), so the strict
+     IPOPT defaults converge. The April 2026 prototype's recipe (unit scale,
+     acceptable_tol = 1e-2) runs beside it for comparison, together with the
+     scaled problem under the same April tolerances.
 
   3. Coverage vs. inclination sweep:
      Evaluates the coverage fraction for a fixed circular orbit at 700 km
@@ -49,6 +51,7 @@ Run from the project root:
 import math
 
 import casadi as ca
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -270,6 +273,8 @@ def demo_optimization():
     cov_start = coverage_mean(*(start[c] for c in "pfghk"), n_pts=24)   # the NLP's own grid
     print(f"  Start: 500 km, f = 0.01, i = {START_INC_DEG} deg, RAAN = {START_RAAN_DEG:.0f} deg"
           f"  ->  coverage {cov_start:.4f}")
+    print("  (Demo 1's mean coverage differs: 400 km, e = 0.001 and 360 sample points there;")
+    print("  500 km, e = 0.01 and the NLP's 24 points here.)")
     print(f"  Declared scaling: p / {R_EARTH} km, altitude rows / {R_EARTH}^2 km^2; "
           f"IPOPT default tolerances")
     print()
@@ -302,19 +307,23 @@ def demo_optimization():
     # April: unit scale and a loose acceptable tolerance. (Unit scale with the strict
     # defaults does not converge at all: IPOPT stops on Invalid_Number_Detected.)
     april = coverage_problem(APRIL_OPTS, unit_scale=True).solve()
+    # The same April tolerances on the scaled problem separate scaling from tolerance.
+    april_scaled = coverage_problem(APRIL_OPTS).solve()
     shortfall = 1.0 - april.f_opt / result.f_opt
     print("  April recipe (unit scale, acceptable_tol = 1e-2):")
     print(f"    Solver status: {april.status}")
     print(f"    Iterations:    {april.iterations}")
     print(f"    Coverage:      {-april.f_opt:.4f}")
     print()
-    print(f"  {'':<22}{'f*':>10}{'iterations':>12}")
-    print(f"  {'strict, scaled':<22}{result.f_opt:>10.4f}{result.iterations:>12d}")
-    print(f"  {'April, unit scale':<22}{april.f_opt:>10.4f}{april.iterations:>12d}")
-    print("  Why they differ: scaling, not physics -- at unit scale p ~ 7e3 km and the")
-    print("  altitude rows ~ R_earth^2 ~ 4e7 km^2 swamp IPOPT's error measures, so")
+    print(f"  {'':<26}{'f*':>10}{'iterations':>12}  status")
+    for label, res in (("strict, scaled", result), ("scaled, April tolerances", april_scaled),
+                       ("April, unit scale", april)):
+        print(f"  {label:<26}{res.f_opt:>10.4f}{res.iterations:>12d}  {res.status}")
+    print("  Why they differ: scaling, not the tolerance and not physics -- the scaled problem")
+    print("  reaches the same optimum under the April tolerances. At unit scale p ~ 7e3 km and")
+    print("  the altitude rows ~ R_earth^2 ~ 4e7 km^2 swamp IPOPT's error measures, so")
     print(f"  acceptable_tol = 1e-2 stopped early, {shortfall*100:.0f} % short of the optimum")
-    print("  the scaled strict solve reaches (scale, do not loosen tolerances).")
+    print("  the scaled solves reach (scale, do not loosen tolerances).")
     print()
 
     # Plot elevation profiles: start vs optimal
@@ -412,7 +421,8 @@ def main():
     demo_elevation_profile()
     demo_optimization()
     demo_inclination_sweep()
-    plt.show()
+    if matplotlib.get_backend().lower() != "agg":
+        plt.show()
 
 
 if __name__ == "__main__":

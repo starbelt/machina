@@ -6,8 +6,8 @@ Minimal example of using SolverBackend directly to solve the Rosenbrock problem.
     minimize  (1 - x)^2 + 100*(y - x^2)^2
 
 The global minimum is at (x, y) = (1, 1) with f* = 0.
-This is a classic nonlinear benchmark — the valley is easy to find but the
-bottom is a long, narrow, banana-shaped ridge that challenges gradient methods.
+This is a classic nonlinear benchmark — the long, narrow, banana-shaped valley
+is easy to find, but its nearly flat floor challenges gradient methods.
 
 Run from the project root:
 

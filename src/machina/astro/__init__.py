@@ -1,7 +1,7 @@
 """
 machina.astro -- orbital mechanics pack.
 
-Modified equinoctial elements, orbit geometry and the coverage components
+Modified equinoctial elements, orbit geometry and the coverage component
 built on them. Importing this package declares its frames (``eci``, ``ecef``,
 ``lvlh``) and signals into the default signal registry and registers its
 factories: the seven ``transform.*`` (:mod:`~machina.astro.transforms`), the two

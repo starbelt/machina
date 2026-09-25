@@ -3,8 +3,9 @@ Goodput factories: ``cost.sigmoid_goodput`` scores the timeliness of one
 delivered product, ``cost.aggregate_goodput`` the importance-weighted sum over
 products.
 
-The registered names keep their ``cost.`` prefix. Importing this module
-registers both factories; ``import machina.swapc`` imports it.
+The registered names keep their ``cost.`` prefix: registered names are a
+stable ABI. Importing this module registers both factories;
+``import machina.swapc`` imports it.
 """
 
 import casadi as ca
@@ -122,7 +123,7 @@ def make_aggregate_goodput(
     a scalar from the input vector and fed through the goodput function
     independently. This means all products share the same goodput model
     (same k and t50) — if products have different deadlines, construct
-    per-product descriptors and wire them manually at the agent level.
+    per-product descriptors and wire them manually in the caller.
 
     Factory parameters
     ------------------
@@ -181,7 +182,7 @@ def make_aggregate_goodput(
     factory construction, not the MX level.
 
     All products must share the same per-product goodput model. If
-    products have heterogeneous deadline profiles, the agent type should
+    products have heterogeneous deadline profiles, the caller should
     wire per-product sigmoid descriptors manually rather than using this
     factory.
     """

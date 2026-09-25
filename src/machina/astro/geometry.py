@@ -52,7 +52,7 @@ def make_ground_target_eci(*, R_earth: float) -> FunctionDescriptor:
                                cos(lat)*sin(lon),
                                sin(lat)]
     Earth rotation is not modelled — the target is stationary in ECI.
-    For Phase 3c coverage geometry this is an adequate approximation.
+    For coverage geometry this is an adequate approximation.
     """
     lat = ca.SX.sym('lat')
     lon = ca.SX.sym('lon')

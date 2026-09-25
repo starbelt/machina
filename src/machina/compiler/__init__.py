@@ -1,5 +1,5 @@
 """
-machina.compiler — Layer 4 problem compiler.
+machina.compiler — the problem compiler.
 
 Public API
 ----------
