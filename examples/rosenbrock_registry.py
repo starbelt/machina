@@ -1,7 +1,7 @@
 """
-examples/rosenbrock_blocks.py
-------------------------------
-The Rosenbrock problem solved through the Layer 2 block library.
+examples/rosenbrock_registry.py
+--------------------------------
+The Rosenbrock problem solved through the factory registry.
 
     minimize  (a - xy[0])^2 + b*(xy[1] - xy[0]^2)^2
 
@@ -15,18 +15,18 @@ by hand directly into the solver backend (Layer 1 only). This example instead:
   3. Calls the descriptor with MX variables to get an MX cost expression.
   4. Registers that expression with the solver backend as usual.
 
-The mathematical result is identical — the block library is purely additive.
+The mathematical result is identical — the registry is purely additive.
 What it changes is the assembly pattern: functions are named, reusable, and
-discoverable. This is the pattern that Layer 3 (agent types) and Layer 4
-(the YAML compiler) will use.
+discoverable. It is the pattern a component's build() uses to compose the
+physics it declares (examples/fleet_budget.py writes a component).
 
 Run from the project root:
-    python examples/rosenbrock_blocks.py
+    python examples/rosenbrock_registry.py
 """
 
 import matplotlib.pyplot as plt
 
-from machina.blocks import registry
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 
@@ -81,7 +81,7 @@ result = solver.solve()
 # ---------------------------------------------------------------------------
 # 5. Inspect results
 # ---------------------------------------------------------------------------
-print("\n--- Rosenbrock result (via block library) ---")
+print("\n--- Rosenbrock result (via the factory registry) ---")
 print(f"Converged:  {result.success}")
 print(f"xy*[0]    = {result['xy'][0]:.8f}  (expected 1.0)")
 print(f"xy*[1]    = {result['xy'][1]:.8f}  (expected 1.0)")
@@ -92,6 +92,6 @@ print(f"Iterations: {result.stats['iter_count']}")
 # 6. Visualize the NLP wiring
 # ---------------------------------------------------------------------------
 G = build_nlp_graph(solver)
-draw_nlp_graph(G, title='Rosenbrock NLP (via block library)')
+draw_nlp_graph(G, title='Rosenbrock NLP (via the factory registry)')
 plt.tight_layout()
 plt.show()

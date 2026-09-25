@@ -54,7 +54,8 @@ import casadi as ca
 import matplotlib.pyplot as plt
 import numpy as np
 
-from machina.blocks import registry
+import machina.swapc  # noqa: F401
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 

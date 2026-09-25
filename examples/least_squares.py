@@ -9,7 +9,7 @@ A (4×2) and b (4-vector) are fixed parameters; x (2-vector) is the decision
 variable. A is registered as a matrix-valued parameter using the (rows, cols)
 tuple form of add_parameter introduced in Layer 1 v2.
 
-Compare with examples/rosenbrock_blocks.py for the basic block-library pattern.
+Compare with examples/rosenbrock_registry.py for the basic registry pattern.
 
 Run from the project root:
     python examples/least_squares.py
@@ -18,7 +18,7 @@ Run from the project root:
 import matplotlib.pyplot as plt
 import numpy as np
 
-from machina.blocks import registry
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 

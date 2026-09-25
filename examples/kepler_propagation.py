@@ -33,7 +33,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3D projection)
 
-from machina.blocks import registry
+import machina.astro  # noqa: F401
+from machina.library import registry
 
 # ---------------------------------------------------------------------------
 # Constants
