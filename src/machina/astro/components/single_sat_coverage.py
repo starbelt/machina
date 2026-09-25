@@ -2,7 +2,7 @@
 Single-satellite coverage of one fixed ground target, in modified equinoctial
 elements.
 
-April's ``machina.agents.single_sat_coverage`` agent, ported to the Phase 2
+April's ``SingleSatCoverage`` agent (deleted in Phase 3b), ported to the Phase 2
 ``Component`` API. The physics is unchanged: the true longitude ``L`` is
 sampled at ``N`` equally-spaced points across ``[0, 2*pi)``, each sample is
 converted to ECI, the elevation angle above the target is taken, and a

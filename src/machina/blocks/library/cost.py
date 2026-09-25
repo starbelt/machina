@@ -1,7 +1,7 @@
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
+from machina.model.descriptor import FunctionDescriptor
 
 
 @register('cost.quadratic')

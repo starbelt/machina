@@ -1,9 +1,12 @@
-"""Where the descriptors live now; Phase 3b moves the rest of the April descriptor tests here."""
+"""
+The descriptors live in ``machina.model.descriptor`` and nowhere else; the
+April descriptor tests are appended here when the phase-numbered test files
+are split by package.
+"""
 
 import casadi as ca
 import pytest
 
-import machina.blocks.descriptor as shim
 import machina.model.descriptor as canonical
 from machina.model import FunctionDescriptor, SymbolDescriptor
 
@@ -19,13 +22,6 @@ class TestTheCanonicalHomeIsMachinaModel:
     def test_the_package_exports_the_names_from_machina_model_descriptor(self):
         assert FunctionDescriptor is canonical.FunctionDescriptor
         assert SymbolDescriptor is canonical.SymbolDescriptor
-
-    def test_the_blocks_shim_re_exports_the_same_objects(self):
-        assert shim.FunctionDescriptor is canonical.FunctionDescriptor
-        assert shim.SymbolDescriptor is canonical.SymbolDescriptor
-
-    def test_the_shim_re_exports_the_private_valid_semantic_types(self):
-        assert shim._VALID_SEMANTIC_TYPES is canonical._VALID_SEMANTIC_TYPES
 
 
 class TestSemanticTypes:

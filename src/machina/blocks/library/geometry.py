@@ -12,9 +12,9 @@ Both functions use the spherical Earth approximation and snapshot geometry
 
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
 from machina.library.numerics import TINY
+from machina.model.descriptor import FunctionDescriptor
 
 # ---------------------------------------------------------------------------
 # geometry.ground_target_eci

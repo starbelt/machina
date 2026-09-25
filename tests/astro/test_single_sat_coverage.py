@@ -1,16 +1,12 @@
 """
 The astro pack's ``SingleSatCoverage``: what it declares, what importing the
-pack registers, what it builds through the ``Builder``, and that it agrees
-with April's Layer 3 agent at a point.
+pack registers, what it builds through the ``Builder``, and the oracles.
 
-The last of those is the foundation of the A/B: the port is only a port if
-the two implementations return the same numbers from the same inputs, so the
-agreement test evaluates both at an ISS-like state and at an eccentric one.
-
-``TestOracles`` at the foot of the file closes that loop through the
-compiler: April's documented stop point, the strict scaled optimum, and an
-A/B that evaluates both compilers' NLPs -- cost, constraints and both
-Jacobians -- at the same initial point.
+``TestOracles`` at the foot of the file compiles the motivating problem of
+Math/MEE Numerics through ``Problem`` and pins what IPOPT does with it: April's
+documented stop point at unit scale, the strict solve failing unscaled, and
+the strict solve converging to the apogee bound once the declared scales are
+in place.
 """
 
 import math
@@ -65,41 +61,6 @@ def evaluate(component, overrides: dict) -> list:
     return [float(wired.values["sat/coverage_total"]),
             float(wired.constraints[0].expr),
             float(wired.constraints[1].expr)]
-
-
-def evaluate_april(component, overrides: dict) -> list:
-    """The same three numbers from ``machina.agents.SingleSatCoverage``.
-
-    The agent's ``build()`` takes one MX symbol per declared path, returns its
-    constraints as a list carrying ``.expr``, and leaves everything else in the
-    namespace ``resolve()`` reads.
-    """
-    from machina.agents import SingleSatCoverage as AprilAgent
-
-    agent = AprilAgent("sat", {
-        "n_sample_points": component.n_sample_points,
-        "ground_target": {"lat_deg": component.target_lat_deg,
-                          "lon_deg": component.target_lon_deg},
-        "coverage": {"min_elevation_deg": component.min_elevation_deg,
-                     "sigmoid_k": component.sigmoid_k},
-        "altitude_bounds": {"perigee_min_km": component.perigee_min_km,
-                            "apogee_max_km": component.apogee_max_km},
-        "constants": {"mu": component.mu, "R_earth": component.R_earth},
-    })
-    declarations = agent.declare()
-    symbols = {d.path: ca.MX.sym(d.path.replace("/", "_"), d.shape[0], d.shape[1])
-               for d in declarations}
-    constraints = agent.build(symbols)
-    fn = ca.Function("april", [symbols[d.path] for d in declarations],
-                     [agent.resolve("coverage/total").symbol,
-                      constraints[0].expr, constraints[1].expr])
-
-    # The agent declares its quantities in the same order the component does.
-    args = []
-    for declaration, name in zip(declarations, QUANTITY_NAMES):
-        value = overrides.get(name, declaration.default_value)
-        args.append(ca.DM(np.asarray(value, dtype=float).reshape(declaration.shape)))
-    return [float(v) for v in fn(*args)]
 
 
 class TestDeclaration:
@@ -277,36 +238,12 @@ class TestBuildThroughTheBuilder:
         assert bundle["g"].size1_out(0) == 1         # coverage_total
 
 
-class TestAgreementWithAprilsAgent:
-    """The port returns April's numbers. The next agent's A/B builds on this."""
-
-    @pytest.mark.parametrize("f, g", [(0.01, 0.0), (0.1, -0.05)])
-    def test_same_coverage_and_constraints_at_a_point(self, f, g):
-        component = SingleSatCoverage(n_sample_points=24)
-        state = iss_like(f=f, g=g)                   # ISS-like, RAAN = 240 deg
-        np.testing.assert_allclose(evaluate(component, state),
-                                   evaluate_april(component, state), rtol=1e-12)
-
-    def test_the_two_declare_their_quantities_in_the_same_order(self):
-        from machina.agents import SingleSatCoverage as AprilAgent
-
-        april = AprilAgent("sat", {"n_sample_points": 24})
-        leaf_names = [d.path.rpartition("/")[2] for d in april.declare()]
-        # April's paths are grouped ('orbital/p', 'target/position') and its parameters
-        # are named differently ('L', 'position', 'min_elevation', 'sigmoid_k'); the
-        # component flattens and renames, but the order -- the vector layout -- is the
-        # same, and the A/B below maps overrides by that position.
-        assert leaf_names == ["p", "f", "g", "h", "k", "L", "position", "min_elevation",
-                              "sigmoid_k"]
-        assert len(leaf_names) == len(QUANTITY_NAMES)
-
-
 # --- the oracles ------------------------------------------------------------------------------
 #
 # The motivating problem of Math/MEE Numerics, compiled through ``Problem``: maximise coverage
-# of Washington DC over a 200-1600 km altitude box from an ISS-like start. Three numbers are
-# pinned, all measured on the April path first (tests/solver/test_scaling.py), and the A/B below
-# is what makes them oracles rather than regressions: the two paths hand IPOPT the same NLP.
+# of Washington DC over a 200-1600 km altitude box from an ISS-like start. Two oracles are
+# pinned -- April's documented stop point at unit scale and the strict scaled optimum on the
+# apogee bound -- together with the strict unscaled solve whose failure is why the scaling exists.
 
 APRIL_OPTS = {"ipopt.tol": 1e-4, "ipopt.acceptable_tol": 1e-2, "ipopt.acceptable_iter": 3}
 P_SCALE = R_EARTH                 # the component's nominal for p: the body radius
@@ -350,49 +287,6 @@ def coverage_problem(solver_opts: dict, *, unit_scale: bool, build: bool = True)
     problem.compile(overrides=coverage_overrides(unit_scale=unit_scale))
     problem.add_cost(-problem.expr("sat/coverage_total").symbol, name="neg_coverage")
     return problem.build() if build else problem
-
-
-def april_problem(solver_opts: dict):
-    """The same problem through April's agent and the compiler stub, unscaled.
-
-    Copied from ``tests/solver/test_scaling.py::TestCoverageProblem.compile`` so the A/B owns
-    its reference; the April path itself is untouched.
-    """
-    from machina.agents import SingleSatCoverage as AprilAgent
-    from machina.compiler.compiler_stub import CompilerStub
-    from machina.solver import SolverBackend
-
-    agent = AprilAgent("sat", {
-        "n_sample_points": 24,
-        "ground_target": {"lat_deg": 38.9, "lon_deg": -77.0},
-        "coverage": {"min_elevation_deg": 10.0, "sigmoid_k": 20.0},
-        "altitude_bounds": {"perigee_min_km": 200.0, "apogee_max_km": 1600.0},
-        "constants": {"mu": MU, "R_earth": R_EARTH},
-    })
-    compiler = CompilerStub(solver=SolverBackend(verbose=False, solver_opts=solver_opts))
-    compiler.add_agent(agent)
-    state = iss_like()
-    overrides = {f"sat/orbital/{name}": {"value": state[name], "lb": lb, "ub": ub}
-                 for name, lb, ub in ELEMENT_BOUNDS}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        compiler.compile(overrides=overrides)
-    compiler.add_cost(-compiler.resolve("sat", "coverage/total").symbol, name="neg_coverage")
-    compiler.build_solver()
-    return compiler
-
-
-def nlp_function(backend) -> ca.Function:
-    """``(x, p) -> (f, g, df/dx, dg/dx)`` from a backend's physical, unscaled NLP."""
-    nlp = backend.nlp_expressions()
-    x, p, f, g = nlp["x"], nlp["p"], nlp["f"], nlp["g"]
-    return ca.Function("nlp", [x, p], [f, g, ca.jacobian(f, x), ca.jacobian(g, x)])
-
-
-def parameter_vector(backend) -> ca.DM:
-    """The stored parameter values, stacked in registration order."""
-    return ca.vertcat(*[ca.DM(np.asarray(record.value, dtype=float).reshape(-1, 1))
-                        for record in backend.parameters()])
 
 
 class TestOracles:
@@ -441,40 +335,3 @@ class TestOracles:
             warnings.simplefilter("always")
             coverage_problem({}, unit_scale=False, build=False)
         assert [str(w.message) for w in caught if issubclass(w.category, UserWarning)] == []
-
-    def test_ab_against_the_april_path(self):
-        """Both compilers hand IPOPT the same NLP, to the last bit where AD allows.
-
-        Cost, constraints and both Jacobians, evaluated at the shared initial point. ``f``,
-        ``g`` and ``dg/dx`` are bit-identical; ``df/dx`` differs in the last couple of ulp
-        because the component reaches the cost through ``ca.Function`` call nodes and the
-        agent through one inlined graph, so reverse mode accumulates in a different order.
-        """
-        ours = coverage_problem({}, unit_scale=True, build=False).backend
-        theirs = april_problem({}).solver
-
-        # The two orders correspond: same five elements, same four parameters, same layout.
-        assert ours.variable_order() == [f"sat/{name}" for name, _, _ in ELEMENT_BOUNDS]
-        assert ([path.rpartition("/")[2] for path in theirs.variable_order()]
-                == [path.rpartition("/")[2] for path in ours.variable_order()])
-        assert ours.parameter_order() == ["sat/L", "sat/r_target", "sat/min_elevation",
-                                          "sat/sigmoid_k"]
-        assert theirs.parameter_order() == ["sat/sample_points/L", "sat/target/position",
-                                            "sat/coverage/min_elevation",
-                                            "sat/coverage/sigmoid_k"]
-        p_value = parameter_vector(ours)
-        np.testing.assert_array_equal(np.array(p_value), np.array(parameter_vector(theirs)))
-
-        state = iss_like()
-        x0 = ca.DM([[state[name]] for name, _, _ in ELEMENT_BOUNDS])
-        outputs = ("f", "g", "df/dx", "dg/dx")
-        for name, mine, aprils in zip(outputs, nlp_function(ours)(x0, p_value),
-                                      nlp_function(theirs)(x0, p_value)):
-            mine, aprils = np.array(ca.densify(mine)), np.array(ca.densify(aprils))
-            if name == "df/dx":
-                # A few ulp, and only here. Tight enough that a real graph difference fails.
-                np.testing.assert_allclose(mine, aprils, rtol=1e-15, atol=0,
-                                           err_msg=f"{name} differs by more than a few ulp")
-            else:
-                np.testing.assert_array_equal(mine, aprils,
-                                              err_msg=f"{name} is not bit-identical")

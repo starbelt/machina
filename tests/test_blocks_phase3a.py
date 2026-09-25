@@ -1,12 +1,10 @@
 """
-Phase 3a tests — coordinate transforms, AgentType lifecycle, compiler stub.
+Phase 3a tests — coordinate transforms and their registration.
 
 Sections
 --------
 TestCoordinateTransforms   -- KOE↔MEE↔ECI, roundtrip and against reference
 TestTransformRegistry      -- registry registration and FunctionDescriptor metadata
-TestAgentTypeLifecycle     -- MockAgent declare/build/resolve, error conditions
-TestCompilerStubLifecycle  -- role assignment, parameter wiring, solvable NLP
 
 Reference implementation
 ------------------------
@@ -14,21 +12,11 @@ _koe_to_eci_ref() in this file provides an independent numpy-based PQW→ECI
 computation used to validate mee_to_eci without relying on the same formula.
 """
 
-import warnings
-
 import casadi as ca
 import numpy as np
 import pytest
 
-from machina.agents.agent_type import (
-    AgentType,
-    ConstraintDeclaration,
-    QuantityDeclaration,
-)
 from machina.blocks import registry
-from machina.blocks.descriptor import SymbolDescriptor
-from machina.compiler.compiler_stub import CompilerStub
-from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi
 
@@ -38,13 +26,6 @@ MU_EARTH = 398600.4418  # km³/s²
 # ===========================================================================
 # Helpers
 # ===========================================================================
-
-def make_solver(**opts):
-    """Create a test SolverBackend with quiet output."""
-    defaults = {'ipopt.print_level': 0, 'print_time': 0}
-    defaults.update(opts)
-    return SolverBackend(solver_opts=defaults)
-
 
 def _koe_to_eci_ref(a, e, inc, raan, aop, nu):
     """
@@ -73,11 +54,6 @@ def _koe_to_eci_ref(a, e, inc, raan, aop, nu):
     # convention R3(θ) = [[cosθ,-sinθ,0],[sinθ,cosθ,0],[0,0,1]].
     Q = R3(raan) @ R1(inc) @ R3(aop)
     return Q @ r_pqw
-
-
-def _eval_mx(expr, *args):
-    """Evaluate a CasADi MX/DM expression numerically, returning a numpy array."""
-    return np.array(ca.DM(expr)).flatten()
 
 
 def _call_koe_to_mee(koe_np):
@@ -279,17 +255,17 @@ class TestTransformRegistry:
                .issubset(set(transforms))
 
     def test_koe_to_mee_returns_function_descriptor(self):
-        from machina.blocks.descriptor import FunctionDescriptor
+        from machina.model import FunctionDescriptor
         fd = registry.get('transform.koe_to_mee')()
         assert isinstance(fd, FunctionDescriptor)
 
     def test_mee_to_koe_returns_function_descriptor(self):
-        from machina.blocks.descriptor import FunctionDescriptor
+        from machina.model import FunctionDescriptor
         fd = registry.get('transform.mee_to_koe')()
         assert isinstance(fd, FunctionDescriptor)
 
     def test_mee_to_eci_returns_function_descriptor(self):
-        from machina.blocks.descriptor import FunctionDescriptor
+        from machina.model import FunctionDescriptor
         fd = registry.get('transform.mee_to_eci')(mu=MU_EARTH)
         assert isinstance(fd, FunctionDescriptor)
 
@@ -333,480 +309,3 @@ class TestTransformRegistry:
     def test_mee_to_eci_description_contains_mu(self):
         fd = registry.get('transform.mee_to_eci')(mu=MU_EARTH)
         assert str(MU_EARTH) in fd.description
-
-
-# ===========================================================================
-# Section 3 — AgentType Lifecycle Tests
-# ===========================================================================
-
-class MockAgent(AgentType):
-    """
-    Minimal concrete agent for testing the base-class lifecycle.
-
-    Declares three quantities:
-      - 'state/sma'  : flexible variable (semi-major axis)
-      - 'state/ecc'  : always_variable (eccentricity)
-      - 'mu'         : always_parameter (gravitational parameter)
-
-    build() populates namespace with the three declared symbols plus one
-    computed expression 'v_circ' = sqrt(mu/sma).
-    """
-
-    def declare(self) -> list[QuantityDeclaration]:
-        return [
-            QuantityDeclaration(
-                path='state/sma',
-                shape=(1, 1),
-                semantic_type='scalar',
-                default_value=7000.0,
-                lb=6371.0,
-                ub=42164.0,
-                description='Semi-major axis',
-                units='km',
-                role='flexible',
-                default_role='variable',
-            ),
-            QuantityDeclaration(
-                path='state/ecc',
-                shape=(1, 1),
-                semantic_type='scalar',
-                default_value=0.01,
-                lb=0.0,
-                ub=0.9,
-                description='Eccentricity',
-                units=None,
-                role='always_variable',
-            ),
-            QuantityDeclaration(
-                path='mu',
-                shape=(1, 1),
-                semantic_type='scalar',
-                default_value=MU_EARTH,
-                lb=-np.inf,
-                ub=np.inf,
-                description='Gravitational parameter',
-                units='km3/s2',
-                role='always_parameter',
-            ),
-        ]
-
-    def build(self, symbols: dict) -> list[ConstraintDeclaration]:
-        sma = symbols['state/sma']
-        ecc = symbols['state/ecc']
-        mu_sym = symbols['mu']
-
-        self._namespace['state/sma'] = SymbolDescriptor(
-            symbol=sma, name='state/sma', shape=(1, 1),
-            semantic_type='scalar', units='km',
-        )
-        self._namespace['state/ecc'] = SymbolDescriptor(
-            symbol=ecc, name='state/ecc', shape=(1, 1),
-            semantic_type='scalar',
-        )
-        self._namespace['mu'] = SymbolDescriptor(
-            symbol=mu_sym, name='mu', shape=(1, 1),
-            semantic_type='scalar', units='km3/s2',
-        )
-        # Computed expression: circular velocity sqrt(μ/a)
-        v_circ = ca.sqrt(mu_sym / sma)
-        self._namespace['v_circ'] = SymbolDescriptor(
-            symbol=v_circ, name='v_circ', shape=(1, 1),
-            semantic_type='scalar', units='km/s',
-        )
-
-        self._built = True
-        return [
-            ConstraintDeclaration(
-                expr=ecc,
-                lb=0.0,
-                ub=0.9,
-                name='ecc_bounds',
-                description='Eccentricity physical bounds',
-            )
-        ]
-
-
-class TestAgentTypeLifecycle:
-    """MockAgent declaration, build, resolve, and error-condition tests."""
-
-    def _make_symbols(self, agent):
-        """Create dummy MX symbols matching the agent's declarations."""
-        syms = {}
-        for decl in agent.declare():
-            syms[decl.path] = ca.MX.sym(decl.path, *decl.shape)
-        return syms
-
-    # --- declare() ---
-
-    def test_declare_returns_list(self):
-        agent = MockAgent('test_agent', {})
-        decls = agent.declare()
-        assert isinstance(decls, list)
-
-    def test_declare_returns_correct_count(self):
-        agent = MockAgent('test_agent', {})
-        decls = agent.declare()
-        assert len(decls) == 3
-
-    def test_declare_all_quantity_declarations(self):
-        agent = MockAgent('test_agent', {})
-        decls = agent.declare()
-        assert all(isinstance(d, QuantityDeclaration) for d in decls)
-
-    def test_declare_no_mx_symbols_created(self):
-        agent = MockAgent('test_agent', {})
-        decls = agent.declare()
-        for decl in decls:
-            assert not isinstance(decl.default_value, ca.MX), (
-                f"QuantityDeclaration.default_value should not be ca.MX: {decl.path}"
-            )
-
-    def test_declare_roles_are_correct(self):
-        agent = MockAgent('test_agent', {})
-        decls = {d.path: d for d in agent.declare()}
-        assert decls['state/sma'].role == 'flexible'
-        assert decls['state/ecc'].role == 'always_variable'
-        assert decls['mu'].role == 'always_parameter'
-
-    # --- build() ---
-
-    def test_build_populates_namespace(self):
-        agent = MockAgent('test_agent', {})
-        symbols = self._make_symbols(agent)
-        agent.build(symbols)
-        assert len(agent._namespace) == 4  # 3 declared + 1 computed
-
-    def test_build_sets_built_flag(self):
-        agent = MockAgent('test_agent', {})
-        assert not agent._built
-        agent.build(self._make_symbols(agent))
-        assert agent._built
-
-    def test_build_namespace_contains_computed_expression(self):
-        agent = MockAgent('test_agent', {})
-        agent.build(self._make_symbols(agent))
-        assert 'v_circ' in agent._namespace
-
-    def test_build_returns_constraint_declarations(self):
-        agent = MockAgent('test_agent', {})
-        constraints = agent.build(self._make_symbols(agent))
-        assert len(constraints) == 1
-        assert isinstance(constraints[0], ConstraintDeclaration)
-        assert constraints[0].name == 'ecc_bounds'
-
-    # --- resolve() ---
-
-    def test_resolve_works_after_build(self):
-        agent = MockAgent('test_agent', {})
-        agent.build(self._make_symbols(agent))
-        sd = agent.resolve('state/sma')
-        assert isinstance(sd, SymbolDescriptor)
-
-    def test_resolve_raises_runtime_error_before_build(self):
-        agent = MockAgent('test_agent', {})
-        with pytest.raises(RuntimeError, match="before build"):
-            agent.resolve('state/sma')
-
-    def test_resolve_raises_key_error_for_unknown_path(self):
-        agent = MockAgent('test_agent', {})
-        agent.build(self._make_symbols(agent))
-        with pytest.raises(KeyError, match="nonexistent/path"):
-            agent.resolve('nonexistent/path')
-
-    def test_resolve_key_error_lists_available_paths(self):
-        agent = MockAgent('test_agent', {})
-        agent.build(self._make_symbols(agent))
-        with pytest.raises(KeyError) as exc_info:
-            agent.resolve('no/such/path')
-        # Available paths should be in the error message
-        assert 'state/sma' in str(exc_info.value)
-
-    # --- list_paths() ---
-
-    def test_list_paths_empty_before_build(self):
-        agent = MockAgent('test_agent', {})
-        assert agent.list_paths() == []
-
-    def test_list_paths_sorted_after_build(self):
-        agent = MockAgent('test_agent', {})
-        agent.build(self._make_symbols(agent))
-        paths = agent.list_paths()
-        assert paths == sorted(paths)
-        assert len(paths) == 4
-
-    # --- QuantityDeclaration validation ---
-
-    def test_quantity_declaration_invalid_role_raises(self):
-        with pytest.raises(ValueError, match="invalid role"):
-            QuantityDeclaration(
-                path='x', shape=(1, 1), semantic_type='scalar',
-                default_value=0.0, lb=-1.0, ub=1.0,
-                description='test', role='bad_role',
-            )
-
-    def test_quantity_declaration_invalid_default_role_raises(self):
-        with pytest.raises(ValueError, match="invalid default_role"):
-            QuantityDeclaration(
-                path='x', shape=(1, 1), semantic_type='scalar',
-                default_value=0.0, lb=-1.0, ub=1.0,
-                description='test', default_role='bad_default_role',
-            )
-
-    def test_quantity_declaration_invalid_semantic_type_raises(self):
-        with pytest.raises(ValueError, match="invalid semantic_type"):
-            QuantityDeclaration(
-                path='x', shape=(1, 1), semantic_type='tensor',
-                default_value=0.0, lb=-1.0, ub=1.0,
-                description='test',
-            )
-
-    def test_quantity_declaration_path_no_leading_slash(self):
-        with pytest.raises(ValueError, match="must not start with '/'"):
-            QuantityDeclaration(
-                path='/bad/path', shape=(1, 1), semantic_type='scalar',
-                default_value=0.0, lb=-1.0, ub=1.0,
-                description='test',
-            )
-
-    def test_quantity_declaration_warns_when_default_role_set_on_non_flexible(self):
-        with pytest.warns(UserWarning, match="no effect"):
-            QuantityDeclaration(
-                path='x', shape=(1, 1), semantic_type='scalar',
-                default_value=0.0, lb=-1.0, ub=1.0,
-                description='test',
-                role='always_variable',
-                default_role='parameter',  # has no effect — should warn
-            )
-
-    # --- ConstraintDeclaration ---
-
-    def test_constraint_declaration_fields(self):
-        expr = ca.MX.sym('x', 1)
-        cd = ConstraintDeclaration(
-            expr=expr, lb=0.0, ub=1.0,
-            name='my_constraint', description='test constraint',
-        )
-        assert cd.name == 'my_constraint'
-        assert cd.lb == 0.0
-        assert cd.ub == 1.0
-
-    # --- repr ---
-
-    def test_agent_repr_before_build(self):
-        agent = MockAgent('my_agent', {})
-        r = repr(agent)
-        assert 'my_agent' in r
-        assert 'not built' in r
-
-    def test_agent_repr_after_build(self):
-        agent = MockAgent('my_agent', {})
-        agent.build(self._make_symbols(agent))
-        r = repr(agent)
-        assert 'built' in r
-
-
-# ===========================================================================
-# Section 4 — CompilerStub Lifecycle Tests
-# ===========================================================================
-
-class TestCompilerStubLifecycle:
-    """Role assignment, parameter wiring, constraints, solvable NLP."""
-
-    def _make_compiler(self, **solver_opts):
-        defaults = {'ipopt.print_level': 0, 'print_time': 0}
-        defaults.update(solver_opts)
-        return CompilerStub(solver_opts=defaults)
-
-    def _make_compiled_compiler(self, overrides=None, **solver_opts):
-        compiler = self._make_compiler(**solver_opts)
-        agent = MockAgent('sat', {})
-        compiler.add_agent(agent)
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', UserWarning)
-            compiler.compile(overrides=overrides)
-        return compiler, agent
-
-    # --- add_agent ---
-
-    def test_add_agent_registers_agent(self):
-        compiler = self._make_compiler()
-        agent = MockAgent('sat', {})
-        compiler.add_agent(agent)
-        assert len(compiler._agents) == 1
-
-    def test_add_agent_rejects_duplicate_name(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with pytest.raises(ValueError, match="already registered"):
-            compiler.add_agent(MockAgent('sat', {}))
-
-    def test_add_agent_raises_after_compile(self):
-        compiler, _ = self._make_compiled_compiler()
-        with pytest.raises(RuntimeError, match="Cannot add agents"):
-            compiler.add_agent(MockAgent('new_agent', {}))
-
-    # --- role assignment ---
-
-    def test_always_variable_creates_variable(self):
-        compiler, _ = self._make_compiled_compiler()
-        # 'sat/state/ecc' is always_variable
-        assert 'sat/state/ecc' in compiler.solver.variable_order()
-
-    def test_always_parameter_creates_parameter(self):
-        compiler, _ = self._make_compiled_compiler()
-        # 'sat/mu' is always_parameter
-        assert 'sat/mu' in compiler.solver.parameter_order()
-
-    def test_flexible_default_variable_creates_variable(self):
-        compiler, _ = self._make_compiled_compiler()
-        # 'sat/state/sma' is flexible with default_role='variable'
-        assert 'sat/state/sma' in compiler.solver.variable_order()
-
-    def test_flexible_override_to_parameter(self):
-        overrides = {'sat/state/sma': {'role': 'parameter', 'value': 7000.0}}
-        compiler, _ = self._make_compiled_compiler(overrides=overrides)
-        assert 'sat/state/sma' in compiler.solver.parameter_order()
-        assert 'sat/state/sma' not in compiler.solver.variable_order()
-
-    def test_override_invalid_role_raises(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with pytest.raises(ValueError, match="'variable' or 'parameter'"):
-            compiler.compile(overrides={'sat/state/sma': {'role': 'bad'}})
-
-    # --- warnings ---
-
-    def test_compile_warns_on_each_unoverridden_quantity(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with pytest.warns(UserWarning):
-            compiler.compile()
-
-    def test_no_warning_when_all_quantities_overridden(self):
-        overrides = {
-            'sat/state/sma': {'value': 7500.0},
-            'sat/state/ecc': {'value': 0.001},
-            'sat/mu': {'value': MU_EARTH},
-        }
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            compiler.compile(overrides=overrides)
-        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
-        assert len(user_warnings) == 0
-
-    # --- constraints ---
-
-    def test_constraint_registered_with_solver(self):
-        compiler, _ = self._make_compiled_compiler()
-        # MockAgent.build() returns one ConstraintDeclaration
-        assert len(compiler.solver.constraints()) == 1
-
-    def test_constraint_name_prefixed_with_agent_name(self):
-        compiler, _ = self._make_compiled_compiler()
-        name = compiler.solver.constraints()[0].name
-        assert name.startswith('sat/')
-
-    # --- double compile ---
-
-    def test_double_compile_raises(self):
-        compiler, _ = self._make_compiled_compiler()
-        with pytest.raises(RuntimeError, match="already been called"):
-            compiler.compile()
-
-    # --- resolve ---
-
-    def test_resolve_returns_symbol_descriptor(self):
-        compiler, _ = self._make_compiled_compiler()
-        sd = compiler.resolve('sat', 'state/sma')
-        assert isinstance(sd, SymbolDescriptor)
-
-    def test_resolve_unknown_agent_raises(self):
-        compiler, _ = self._make_compiled_compiler()
-        with pytest.raises(KeyError, match="no agent named"):
-            compiler.resolve('nonexistent', 'state/sma')
-
-    def test_resolve_unknown_path_raises(self):
-        compiler, _ = self._make_compiled_compiler()
-        with pytest.raises(KeyError):
-            compiler.resolve('sat', 'no/such/path')
-
-    # --- full solvable NLP ---
-
-    def test_full_nlp_solves_successfully(self):
-        """
-        Minimize (sma - 7000)² subject to ecc ∈ [0, 0.9].
-        Optimal: sma ≈ 7000.0 km, ecc = initial guess.
-        """
-        overrides = {
-            'sat/state/sma': {'value': 8000.0, 'initial_guess': 8000.0},
-            'sat/state/ecc': {'value': 0.01},
-            'sat/mu': {'value': MU_EARTH},
-        }
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        compiler.compile(overrides=overrides)
-
-        # Minimize (sma - 7000)²
-        sma_sym = compiler.resolve('sat', 'state/sma').symbol
-        compiler.add_cost((sma_sym - 7000.0) ** 2, name='sma_cost')
-
-        compiler.build_solver()
-        result = compiler.solve()
-
-        assert result.success
-        np.testing.assert_allclose(result['sat/state/sma'], 7000.0, atol=1.0)
-
-    def test_parameter_value_wired_correctly(self):
-        """
-        When mu is a parameter, its numeric value should be accessible in
-        the solution via computed namespace expressions.
-        The solve should succeed and sma converge to the expected value.
-        """
-        overrides = {
-            'sat/state/sma': {'value': 8000.0, 'initial_guess': 8000.0},
-            'sat/state/ecc': {'value': 0.01},
-            'sat/mu': {'value': MU_EARTH},
-        }
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        compiler.compile(overrides=overrides)
-
-        sma_sym = compiler.resolve('sat', 'state/sma').symbol
-        compiler.add_cost((sma_sym - 7500.0) ** 2)
-
-        compiler.build_solver()
-        result = compiler.solve()
-
-        assert result.success
-        np.testing.assert_allclose(result['sat/state/sma'], 7500.0, atol=1.0)
-
-    def test_add_cost_before_compile_raises(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with pytest.raises(RuntimeError, match="Call compile"):
-            compiler.add_cost(ca.MX.zeros(1), name='test')
-
-    def test_add_constraint_before_compile_raises(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        with pytest.raises(RuntimeError, match="Call compile"):
-            compiler.add_constraint(ca.MX.zeros(1), lb=0.0, ub=1.0)
-
-    def test_solve_before_build_solver_raises(self):
-        compiler, _ = self._make_compiled_compiler()
-        with pytest.raises(RuntimeError, match="build_solver"):
-            compiler.solve()
-
-    def test_compiler_repr(self):
-        compiler = self._make_compiler()
-        compiler.add_agent(MockAgent('sat', {}))
-        r = repr(compiler)
-        assert '1 agent' in r
-        assert 'not compiled' in r
-
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            compiler.compile()
-        assert 'compiled' in repr(compiler)

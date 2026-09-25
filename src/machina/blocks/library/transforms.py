@@ -38,9 +38,9 @@ Walker, M.J.H., Ireland, B., Owens, J. (1985). A Set of Modified Equinoctial
 
 import casadi as ca
 
-from machina.blocks.descriptor import FunctionDescriptor
 from machina.blocks.registry import register
 from machina.library.numerics import EPS, TINY
+from machina.model.descriptor import FunctionDescriptor
 
 # ---------------------------------------------------------------------------
 # transform.koe_to_mee
