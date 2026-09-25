@@ -3,6 +3,7 @@ Function registry: factories by name.
 
 Usage:
     from machina.library import registry
+    from machina.model import FunctionDescriptor
 
     # Register a factory (typically done via decorator in library modules):
     @registry.register('cost.my_function')
@@ -63,7 +64,11 @@ def get(name: str) -> Callable:
         available = ', '.join(sorted(_registry.keys()))
         raise KeyError(
             f"Registry: '{name}' not found. "
-            f"Available factories: [{available}]"
+            f"Available factories: [{available}]. "
+            "Pack factories register when their pack is imported: "
+            "`import machina.astro` (transform.*, geometry.*, cost.smooth_coverage), "
+            "`import machina.swapc` (cost.sigmoid_goodput, cost.aggregate_goodput, "
+            "util.ttp_computation)."
         )
     return _registry[name]
 
