@@ -11,6 +11,8 @@ transform.lagrange_coefficients -- Lagrange f/g coefficients given universal ano
 transform.universal_kepler    -- Solve universal Kepler equation for χ (ca.rootfinder)
 transform.propagate_universal -- Two-body propagation: (r₀, v₀, Δt) → (r, v)
 
+Importing this module registers all seven; ``import machina.astro`` imports it.
+
 Modified Equinoctial Elements (MEE)
 ------------------------------------
 MEE avoid the singularities of classical KOE at circular (e→0) and equatorial
@@ -379,7 +381,7 @@ def make_universal_kepler(
       is present in the NLP.
     - For highly eccentric orbits (e > 0.9) or very long propagation arcs,
       the circular-orbit initial guess may require more Newton iterations.
-      No issues expected for near-circular flyby orbits (Phase 3b scope).
+      No issues expected for near-circular flyby orbits (universal-variable propagation).
     """
     stumpff_fd = make_stumpff_cs()
     sqrt_mu = ca.sqrt(mu)

@@ -18,7 +18,8 @@ import pytest
 
 matplotlib.use('Agg')  # non-interactive backend; must be set before pyplot import
 
-from machina.blocks import registry
+import machina.swapc  # noqa: F401
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 from machina.viz import build_nlp_graph, draw_nlp_graph
 

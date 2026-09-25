@@ -1,3 +1,11 @@
+"""
+Latency factory: ``util.ttp_computation`` sums the delay stages of a data
+product's time to product (TTP).
+
+The registered name keeps its ``util.`` prefix. Importing this module registers
+the factory; ``import machina.swapc`` imports it.
+"""
+
 import casadi as ca
 
 from machina.library.registry import register

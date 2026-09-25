@@ -39,16 +39,34 @@ def pytest_report_header(config):
     return f"casadi {casadi.__version__} nlpsol plugins: {plugins}"
 
 
+def _import_packs():
+    """
+    Packs declare signals and register factories on import; they must be in the
+    baseline both fixtures restore to. Declaration order is the layout ABI: rigid (2a)
+    before astro (3a) before swapc (3b). Append here, never insert; the isort splits
+    keep the linter from re-sorting them.
+    """
+    import machina.library  # noqa: F401  (registers the generic factories)
+    import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
+    # isort: split
+    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh, coverage_total; 10 factories)
+    # isort: split
+    import machina.swapc  # noqa: F401  (registers the goodput and latency factories)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_function_registry():
     """
     The function registry is process-global. Snapshot it around every test so a
-    test that registers a factory cannot leak it into the next one.
+    test that registers a factory cannot leak it into the next one. Packs register
+    their factories at import time, so they are imported first: a pack imported for
+    the first time inside a test would otherwise lose its factories to the restore.
     """
     if not HAS_CASADI:
         yield
         return
-    from machina.blocks import registry
+    _import_packs()
+    from machina.library import registry
     state = registry.snapshot()
     yield
     registry.restore(state)
@@ -66,12 +84,7 @@ def _isolated_signal_registry():
     if not HAS_CASADI:
         yield
         return
-    # Declaration order is the layout ABI, so packs are imported oldest first: rigid (Phase 2a)
-    # before astro (Phase 3a). Append here, never insert; the isort split keeps the linter from
-    # re-sorting them alphabetically.
-    import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
-    # isort: split
-    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh and coverage_total)
+    _import_packs()
     from machina.model import signals
     state = signals.DEFAULT.snapshot()
     yield

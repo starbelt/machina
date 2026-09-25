@@ -33,9 +33,9 @@ import math
 import casadi as ca
 import numpy as np
 
-from machina.blocks.library.cost import make_smooth_coverage
-from machina.blocks.library.geometry import make_elevation_angle
-from machina.blocks.library.transforms import make_mee_to_eci
+from machina.astro.coverage import make_smooth_coverage
+from machina.astro.geometry import make_elevation_angle
+from machina.astro.transforms import make_mee_to_eci
 from machina.model import Component, Constraint, Declaration, Quantity, Role
 
 __all__ = ["SingleSatCoverage"]

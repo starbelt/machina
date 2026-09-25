@@ -1,5 +1,5 @@
 """
-Phase 2 tests for machina.blocks — Flyby-relevant function library.
+Phase 2 tests for machina.swapc — Flyby-relevant function library.
 
 Sections
 --------
@@ -14,7 +14,8 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from machina.blocks import registry
+import machina.swapc  # noqa: F401
+from machina.library import registry
 from machina.solver.backend import SolverBackend
 
 pytestmark = pytest.mark.requires_casadi

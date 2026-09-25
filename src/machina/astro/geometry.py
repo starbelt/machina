@@ -8,6 +8,8 @@ geometry.elevation_angle    -- Elevation angle of satellite above ground target 
 
 Both functions use the spherical Earth approximation and snapshot geometry
 (Earth rotation is not modelled).  The target is treated as stationary in ECI.
+
+Importing this module registers both; ``import machina.astro`` imports it.
 """
 
 import casadi as ca

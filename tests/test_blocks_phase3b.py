@@ -18,7 +18,8 @@ pytestmark = pytest.mark.requires_casadi
 
 import casadi as ca
 
-from machina.blocks import registry
+import machina.astro  # noqa: F401
+from machina.library import registry
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -99,7 +99,7 @@ class TestThereIsOnlyOneCopy:
         assert not hits, "\n".join(hits)
 
     def test_the_orbital_factories_now_import_the_shared_guard(self):
-        from machina.blocks.library import geometry, transforms
+        from machina.astro import geometry, transforms
         assert geometry.TINY is TINY
         assert transforms.TINY is TINY and transforms.EPS is EPS
 
@@ -107,7 +107,8 @@ class TestThereIsOnlyOneCopy:
     def test_centralising_it_did_not_move_any_numbers(self, psi):
         """The Stumpff functions are the sensitive consumer. psi = +-1e-6 exercises the
         EPS Taylor branch, the others the closed forms that TINY guards."""
-        from machina.blocks import registry
+        import machina.astro  # noqa: F401
+        from machina.library import registry
         stumpff = registry.get("transform.stumpff_cs")()
         c, s = (float(v) for v in stumpff.function(psi))
         if psi > 0:

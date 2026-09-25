@@ -16,7 +16,8 @@ import casadi as ca
 import numpy as np
 import pytest
 
-from machina.blocks import registry
+import machina.astro  # noqa: F401
+from machina.library import registry
 
 pytestmark = pytest.mark.requires_casadi
 
