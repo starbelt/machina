@@ -74,10 +74,28 @@ __all__ = [
 
 def _require_positive(name: str, value: float, where: str) -> float:
     """``float(value)``, or a ValueError naming the factory when it is not > 0."""
-    value = float(value)
-    if not (value > 0.0 and math.isfinite(value)):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        number = math.nan
+    if not (number > 0.0 and math.isfinite(number)):
         raise ValueError(f"{where}: {name} must be a positive finite number, got {value!r}.")
-    return value
+    return number
+
+
+def _require_count(name: str, value: int, where: str) -> int:
+    """``int(value)``, or a ValueError naming the caller unless it is an integer >= 1.
+
+    ``bool``, NaN, inf and non-integral numbers are refused; a bare ``int()``
+    would raise an unnamed ValueError on NaN and an OverflowError on inf.
+    """
+    try:
+        ok = not isinstance(value, bool) and value >= 1 and int(value) == value
+    except (TypeError, ValueError, OverflowError):
+        ok = False
+    if not ok:
+        raise ValueError(f"{where}: {name} must be a positive integer, got {value!r}.")
+    return int(value)
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +261,13 @@ def make_synodic_period(*, mu: float) -> FunctionDescriptor:
     Numerics
     --------
     ``|n_1 - n_2|`` is floored at ``TINY``, so equal radii return
-    ``2 pi / TINY ~ 6e32 s``: "never", not a division by zero. ``mu / a^3`` is a
-    ``safe_divide`` (radii are positive by construction).
+    ``2 pi / TINY ~ 6e32 s`` (~1/TINY): "never", not a division by zero.
+    :func:`ring_pass_interval` and :func:`ring_size_for_interval` refuse any
+    ``T_syn >= 1e30 s`` as that value. Both radii must be positive. They are
+    function inputs (possibly symbolic), so the factory cannot check them: a
+    non-positive radius hits the ``safe_divide`` / ``safe_sqrt`` floors and
+    returns a finite, meaningless period. Bound them in the problem that wires
+    this function.
     """
     mu = _require_positive('mu', mu, 'util.synodic_period')
 
@@ -263,25 +286,58 @@ def make_synodic_period(*, mu: float) -> FunctionDescriptor:
 # Plain helpers
 # ---------------------------------------------------------------------------
 
+# util.synodic_period returns 2 pi / TINY ~ 6e32 s for equal radii; anything this
+# long is that sentinel, not a period.
+_T_SYN_NEVER = 1e30
+
+# Largest ring size ring_size_for_interval returns. Below 2**50 consecutive sizes
+# are distinct floats, so its +-1 corrections after ceil() terminate in a step or two.
+_RING_SIZE_MAX = 2 ** 50
+
+
+def _require_synodic_period(T_syn: float, where: str) -> float:
+    T_syn = _require_positive('T_syn', T_syn, where)
+    if T_syn >= _T_SYN_NEVER:
+        raise ValueError(
+            f"{where}: T_syn = {T_syn:.3g} s is util.synodic_period's 'never' value: the two "
+            f"radii are equal, so there is no relative drift and no ring member ever passes. "
+            f"Give the ring a different radius from the orbit it serves.")
+    return T_syn
+
+
 def ring_pass_interval(T_syn: float, n: int) -> float:
     """Time between passes [s] of ``n`` equally phased ring members past one
     spacecraft on a neighbouring orbit: ``T_syn / n``.
 
-    Raises ValueError unless ``T_syn`` is positive and finite and ``n`` is a
-    positive integer.
+    Raises ValueError unless ``T_syn`` is positive, finite and below 1e30 s
+    (``util.synodic_period``'s value for equal radii) and ``n`` is a positive
+    integer.
     """
-    T_syn = _require_positive('T_syn', T_syn, 'ring_pass_interval')
-    if isinstance(n, bool) or int(n) != n or n < 1:
-        raise ValueError(f"ring_pass_interval: n must be a positive integer, got {n!r}.")
-    return T_syn / int(n)
+    T_syn = _require_synodic_period(T_syn, 'ring_pass_interval')
+    n = _require_count('n', n, 'ring_pass_interval')
+    return T_syn / n
 
 
 def ring_size_for_interval(T_syn: float, T_target: float) -> int:
-    """Smallest ring size whose pass interval is at most ``T_target``:
-    ``ceil(T_syn / T_target)``.
+    """Smallest ring size ``n`` whose pass interval ``ring_pass_interval(T_syn, n)``
+    is at most ``T_target``: ``ceil(T_syn / T_target)``, corrected by one where
+    the rounded quotient lands on the wrong side (``T_syn / n`` is itself rounded).
 
-    Raises ValueError unless both arguments are positive and finite.
+    Raises ValueError unless both arguments are positive and finite, ``T_syn`` is
+    below 1e30 s (``util.synodic_period``'s value for equal radii) and the ring
+    has fewer than 2**50 members.
     """
-    T_syn = _require_positive('T_syn', T_syn, 'ring_size_for_interval')
+    T_syn = _require_synodic_period(T_syn, 'ring_size_for_interval')
     T_target = _require_positive('T_target', T_target, 'ring_size_for_interval')
-    return math.ceil(T_syn / T_target)
+    ratio = T_syn / T_target
+    if not ratio < _RING_SIZE_MAX:
+        raise ValueError(
+            f"ring_size_for_interval: T_syn / T_target = {ratio:.3g} ring members "
+            f"(T_syn = {T_syn!r} s, T_target = {T_target!r} s) is not a ring; check the "
+            f"units of T_target.")
+    n = max(1, math.ceil(ratio))
+    while T_syn / n > T_target:
+        n += 1
+    while n > 1 and T_syn / (n - 1) <= T_target:
+        n -= 1
+    return n

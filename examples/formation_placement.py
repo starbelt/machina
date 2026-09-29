@@ -16,7 +16,11 @@ Three results:
      frame is Earth-fixed for a geostationary chief, so a boresight on a ground
      station is a constant RTN vector: -R (nadir) tilted a few degrees. Numbers
      are illustrative; the answer depends on the tilt direction and on the
-     formation's shape.
+     formation's shape. The sigmoid steepness comes from beam_duty_sharpness
+     and the sample count from the sampling rule in cost.mean_beam_duty
+     (n_samples >= 20 pi sqrt(5) / alpha); the nadir duty is printed beside its
+     closed form and beside the bound atan(tan alpha / 2) / pi that no
+     formation exceeds with a nadir boresight.
 
   3. Ring. A ring of spacecraft on a radius dr above the chief passes it once
      per synodic period per member (util.synodic_period, ring_size_for_interval).
@@ -36,6 +40,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import machina.astro  # noqa: F401
+from machina.astro.beam import beam_duty_sharpness
 from machina.astro.relative import ring_pass_interval, ring_size_for_interval
 from machina.library import registry
 
@@ -49,8 +54,14 @@ SEPARATION_KM = 5.0                # a |de| = a |di| [km]
 PHASE = math.radians(30.0)         # common phase of the e and i vectors
 HALF_ANGLE = math.radians(1.2)     # downlink cone half-angle [rad]
 TILT = math.radians(3.0)           # boresight tilt off nadir [rad]
-K_CONE = 1e4                       # in-cone sigmoid steepness [1/rad]
-N_SAMPLES = 3600                   # longitude samples per orbit (24 s each at GEO)
+N_SAMPLES = 7200                   # longitude samples per orbit (12 s each at GEO)
+K_CONE = beam_duty_sharpness(N_SAMPLES)   # in-cone sigmoid steepness [1/rad]
+
+# Sampling rule of cost.mean_beam_duty: the in-cone arc spans >= ~20 samples.
+N_MIN = math.ceil(20.0 * math.pi * math.sqrt(5.0) / HALF_ANGLE)
+if N_SAMPLES < N_MIN:
+    raise ValueError(f"examples/formation_placement.py: N_SAMPLES = {N_SAMPLES} is below "
+                     f"the sampling rule's {N_MIN} for this HALF_ANGLE; raise N_SAMPLES.")
 
 roe_to_rtn = registry.get('transform.roe_to_rtn')(a=A)
 rn_min = registry.get('geometry.rn_min_separation')(a=A)
@@ -118,10 +129,20 @@ rows = (
      float(np.mean(tilted))),
 )
 
+# Closed forms for the nadir boresight (derivations in cost.mean_beam_duty): this
+# |de| = |di| parallel formation crosses nadir at sqrt(5) rad per rad of longitude;
+# no formation beats the in-plane one (di = 0), which crosses at 2.
+nadir_exact = math.atan(math.tan(HALF_ANGLE) / math.sqrt(5.0)) / math.pi
+nadir_bound = math.atan(math.tan(HALF_ANGLE) / 2.0) / math.pi
+
 print(f"2. Duty inside a {math.degrees(HALF_ANGLE):.1f} deg half-angle cone "
-      f"(k = {K_CONE:g} 1/rad, {N_SAMPLES} samples)")
+      f"(k = beam_duty_sharpness({N_SAMPLES}) = {K_CONE:.1f} 1/rad, "
+      f"{N_SAMPLES} samples >= {N_MIN})")
 for label, value in rows:
     print(f"   {label + ':':<68} {100.0 * value:6.3f} %")
+print(f"   {'nadir, closed form atan(tan(alpha)/sqrt(5))/pi:':<68} {100.0 * nadir_exact:6.3f} %")
+print(f"   {'nadir, bound for any formation atan(tan(alpha)/2)/pi:':<68} "
+      f"{100.0 * nadir_bound:6.3f} %")
 print()
 
 # ---------------------------------------------------------------------------

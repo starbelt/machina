@@ -354,14 +354,49 @@ class TestRingHelpers:
         assert ring_pass_interval(T_syn, n) <= 600.0
         assert ring_pass_interval(T_syn, n - 1) > 600.0
 
-    @pytest.mark.parametrize('T_syn, n', [(0.0, 3), (-1.0, 3), (math.inf, 3), (100.0, 0),
-                                          (100.0, -2), (100.0, 2.5), (100.0, True)])
+    def test_size_meets_its_contract_when_the_quotient_rounds_down(self):
+        """T_syn / T_target rounds to exactly 77.0, but T_syn / 77 is one ulp above
+        T_target: a bare ceil() returns 77 and misses the target."""
+        T_syn, T_target = 2254004.227898477, 29272.7821804997
+        assert T_syn / T_target == 77.0 and T_syn / 77 > T_target
+        n = ring_size_for_interval(T_syn, T_target)
+        assert n == 78
+        assert ring_pass_interval(T_syn, n) <= T_target
+        assert ring_pass_interval(T_syn, n - 1) > T_target
+
+    def test_size_is_the_smallest_meeting_the_target(self):
+        """Random and exact-multiple inputs: n meets the target, n - 1 does not."""
+        rng = np.random.default_rng(4)
+        cases = [(10.0 ** rng.uniform(3, 9), 10.0 ** rng.uniform(1, 4)) for _ in range(2000)]
+        cases += [(m * t, t) for m, t in zip(rng.integers(1, 10_000, 500),
+                                             10.0 ** rng.uniform(-2, 4, 500))]
+        for T_syn, T_target in cases:
+            n = ring_size_for_interval(T_syn, T_target)
+            assert ring_pass_interval(T_syn, n) <= T_target, (T_syn, T_target, n)
+            assert n == 1 or ring_pass_interval(T_syn, n - 1) > T_target, (T_syn, T_target, n)
+
+    @pytest.mark.parametrize('T_syn, n', [(0.0, 3), (-1.0, 3), (math.inf, 3), (math.nan, 3),
+                                          (100.0, 0), (100.0, -2), (100.0, 2.5),
+                                          (100.0, True), (100.0, math.nan), (100.0, math.inf)])
     def test_pass_interval_refuses_bad_input(self, T_syn, n):
         with pytest.raises(ValueError, match="ring_pass_interval"):
             ring_pass_interval(T_syn, n)
 
     @pytest.mark.parametrize('T_syn, T_target', [(0.0, 1.0), (1.0, 0.0), (-5.0, 1.0),
-                                                 (1.0, math.nan)])
+                                                 (1.0, math.nan), (math.nan, 1.0),
+                                                 (math.inf, 1.0), (1.0, math.inf),
+                                                 (1e29, 1e-300)])
     def test_size_refuses_bad_input(self, T_syn, T_target):
+        """The last case is a quotient that overflows to inf (an OverflowError from
+        ceil() without the check)."""
         with pytest.raises(ValueError, match="ring_size_for_interval"):
             ring_size_for_interval(T_syn, T_target)
+
+    def test_equal_radii_refused(self):
+        """util.synodic_period returns ~6e32 s ("never") for equal radii; a ring
+        sized from it would be meaningless."""
+        T_syn = _synodic(A_GEO, A_GEO)
+        with pytest.raises(ValueError, match="ring_pass_interval: .*radii are equal"):
+            ring_pass_interval(T_syn, 4)
+        with pytest.raises(ValueError, match="ring_size_for_interval: .*radii are equal"):
+            ring_size_for_interval(T_syn, 600.0)
