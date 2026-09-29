@@ -11,12 +11,15 @@ TestFrontOfMinimizedObjectives              -- min/min front, duplicates, weak d
 TestMaximizedObjectivesAreFlipped           -- max sense
 TestInvalidRowsAreListedNotScored           -- NaN, inf, log of non-positive, infeasible
 TestEveryTableFormReadsTheSame              -- mapping, rows, as_columns(), DataFrame, errors
+TestRowSelectionsArePositions               -- pandas Index / Series, bool-int mixtures refused
 TestLogDoesNotChangeDominance               -- same front, non-positive rows excluded
 TestFrontMatchesBruteForce                  -- seeded random tables vs an O(n²) reference
 TestNormalizationMapsIdealToZeroNadirToOne  -- both senses, log, over, nadir, degenerate
+TestZeroSpans                               -- front-nadir fallback, ±inf off a degenerate
+                                               ideal, overflowing spans
 TestMaximizedObjectiveEntersAsItsNormalizedValue -- the best η gets η̂ = 0
 TestTwoObjectiveSwitchPoints                -- exact hull, switch points, support classes
-TestSimplexGridForMoreObjectives            -- m = 3 grid count, order, determinism
+TestSimplexGridForMoreObjectives            -- m = 3 grid count, order, determinism, ties
 TestEpsilonConstraint                       -- bounds in both senses, ties, no qualifier
 """
 
@@ -217,6 +220,22 @@ class TestInvalidRowsAreListedNotScored:
         with pytest.raises(ValueError, match="feasible has 1 entries but the table has 2"):
             nondominated({"L": [1.0, 2.0], "eta": [0.5, 0.6]}, LATENCY_ETA, feasible=[True])
 
+    def test_a_float32_nan_in_an_object_feasible_column_is_an_error(self):
+        """Any real NaN, not only a Python float; bool(nan) would read it as feasible."""
+        table = {"L": [1.0, 2.0], "eta": [0.2, 0.9],
+                 "ok": np.array([True, np.float32("nan")], dtype=object)}
+        with pytest.raises(ValueError, match="feasible column 'ok' holds .*nan.* at row 1; "
+                                             "give True or False for every row"):
+            excluded(table, LATENCY_ETA, feasible="ok")
+
+    def test_a_pandas_na_in_a_boolean_feasible_column_is_an_error(self):
+        pd = pytest.importorskip("pandas")
+        table = pd.DataFrame({"L": [1.0, 2.0, 3.0], "eta": [0.2, 0.5, 0.9],
+                              "ok": pd.array([True, None, True], dtype="boolean")})
+        with pytest.raises(ValueError, match="feasible column 'ok' holds <NA> at row 1; "
+                                             "give True or False for every row"):
+            excluded(table, LATENCY_ETA, feasible="ok")
+
 
 # ---------------------------------------------------------------------------
 # Table adapters
@@ -283,6 +302,48 @@ class TestEveryTableFormReadsTheSame:
     def test_an_unreadable_table_is_an_error(self):
         with pytest.raises(TypeError, match="cannot read a table from a int"):
             nondominated(42, ["a"])
+
+
+class TestRowSelectionsArePositions:
+    """``over`` and ``among`` select row positions; a label must never pass for one."""
+
+    @staticmethod
+    def sorted_frame(pd):
+        """Sorted by L, so the index labels are no longer the positions: [5, 1, 3, 2, 4, 0]."""
+        frame = pd.DataFrame({"L": [5.0, 1.0, 3.0, 2.0, 4.0, 0.5],
+                              "eta": [0.9, 0.2, 0.6, 0.4, 0.8, 0.95],
+                              "kind": ["d", "d", "d", "d", "d", "oracle"]})
+        return frame.sort_values("L")
+
+    def test_a_pandas_index_is_refused(self):
+        pd = pytest.importorskip("pandas")
+        frame = self.sorted_frame(pd)
+        labels = frame.index[frame.kind == "d"]
+        with pytest.raises(TypeError, match="pandas Index.*labels are not positions"):
+            normalize(frame, LATENCY_ETA, over=labels)
+        with pytest.raises(TypeError, match="`among` is a pandas Index"):
+            weighted_sweep(frame, LATENCY_ETA, among=labels)
+
+    def test_a_non_boolean_series_is_refused(self):
+        pd = pytest.importorskip("pandas")
+        frame = self.sorted_frame(pd)
+        with pytest.raises(TypeError, match="Series of dtype int64.*labels are not positions"):
+            normalize(frame, LATENCY_ETA, over=pd.Series([1, 2, 3]))
+
+    def test_a_boolean_series_is_a_positional_mask(self):
+        pd = pytest.importorskip("pandas")
+        frame = self.sorted_frame(pd)
+        mask = frame.kind == "d"
+        by_series = normalize(frame, LATENCY_ETA, over=mask)
+        by_position = normalize(frame, LATENCY_ETA, over=np.flatnonzero(mask.to_numpy()))
+        np.testing.assert_array_equal(by_series.values, by_position.values)
+        assert by_series.values[0, 1] < 0.0  # the oracle, first after sorting, beats the ideal
+
+    def test_a_list_mixing_bools_and_ints_is_refused(self):
+        """np.asarray([True, False, 1]) is [1, 0, 1]: rows 0 and 1, not a mask."""
+        with pytest.raises(TypeError, match="`over` mixes booleans and ints"):
+            normalize({"a": [1.0, 2.0, 3.0], "b": [3.0, 2.0, 1.0]}, ["a", "b"],
+                      over=[True, False, 1])
 
 
 class TestLogDoesNotChangeDominance:
@@ -399,6 +460,63 @@ class TestNormalizationMapsIdealToZeroNadirToOne:
         table = {"L": [1.0, float("nan")], "eta": [0.2, 0.5]}
         with pytest.raises(ValueError, match="no valid row in `over`"):
             normalize(table, LINEAR, over=[1])
+
+
+class TestZeroSpans:
+
+    def test_a_dominating_row_takes_the_nadir_from_all_rows(self):
+        """Row 0 dominates, so the front is one point and its span is 0 on both objectives."""
+        table = {"L": [100.0, 1000.0, 5000.0], "eta": [0.9, 0.5, 0.1]}
+        norm = normalize(table, LATENCY_ETA)
+        assert norm.nadir_fallback == ("L", "eta")
+        assert norm.degenerate == ()
+        np.testing.assert_allclose(norm.nadir, [math.log(5000.0), 0.1], rtol=1e-15, atol=0)
+        span = math.log(5000.0) - math.log(100.0)
+        np.testing.assert_allclose(
+            norm.values[:, 0], [0.0, (math.log(1000.0) - math.log(100.0)) / span, 1.0],
+            rtol=1e-14, atol=0)
+        np.testing.assert_allclose(norm.values[:, 1], [0.0, 0.5, 1.0], rtol=1e-14, atol=0)
+
+    def test_the_fallback_is_per_objective(self):
+        """Row 0 dominates; 'a' falls back to all rows, the constant 'c' stays degenerate."""
+        norm = normalize({"a": [1.0, 2.0, 3.0], "c": [5.0, 5.0, 5.0]}, ["a", "c"])
+        assert norm.nadir_fallback == ("a",)
+        assert norm.degenerate == ("c",)
+        np.testing.assert_array_equal(norm.values, [[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]])
+
+    def test_no_fallback_when_the_front_has_a_span(self):
+        assert normalize(DESIGNS, LINEAR).nadir_fallback == ()
+        assert normalize(DESIGNS, LINEAR, nadir="all").nadir_fallback == ()
+
+    @pytest.mark.parametrize("nadir", ["front", "all"])
+    def test_rows_off_a_degenerate_ideal_are_infinite(self, nadir):
+        """Over rows 0-2 'eta' (max) and 'P' (min) are constant; rows 3 and 4 are not."""
+        table = {"L": [10.0, 20.0, 40.0, 5.0, 50.0], "eta": [0.5, 0.5, 0.5, 0.1, 0.9],
+                 "P": [2.0, 2.0, 2.0, 3.0, 1.0]}
+        objectives = [Objective("L", log=True), Objective("eta", "max"), Objective("P")]
+        norm = normalize(table, objectives, over=[0, 1, 2], nadir=nadir)
+        assert norm.degenerate == ("eta", "P")
+        inf = math.inf
+        np.testing.assert_array_equal(norm.values[:, 1], [0.0, 0.0, 0.0, inf, -inf])
+        np.testing.assert_array_equal(norm.values[:, 2], [0.0, 0.0, 0.0, inf, -inf])
+        assert np.isfinite(norm.values[:, 0]).all()
+
+    def test_the_sweep_refuses_candidates_that_differ_on_a_degenerate_objective(self):
+        """Row 3 has the worse eta; with eta flattened to 0 it used to win at w = 0."""
+        table = {"L": [10.0, 20.0, 40.0, 5.0], "eta": [0.5, 0.5, 0.5, 0.1]}
+        with pytest.raises(ValueError, match=r"candidates differ on objective 'eta' \(rows \[3\]"
+                                             r".*zero span over `over`.*widen `over`"):
+            weighted_sweep(table, LATENCY_ETA, over=[0, 1, 2], among=[0, 1, 2, 3], nadir="all")
+
+    @pytest.mark.filterwarnings("error")
+    def test_an_overflowing_span_is_an_error(self):
+        """-1e308 to 1e308 is a span of inf: x̂ was NaN in a valid row, with no error."""
+        table = {"a": [-1e308, 1e308, 0.0], "b": [1.0, 0.0, 0.5]}
+        with pytest.raises(ValueError, match="normalize: objective 'a' runs from .* a span "
+                                             "wider than a float holds; rescale the column 'a'"):
+            normalize(table, ["a", "b"])
+        with pytest.raises(ValueError, match="objective 'a' .* wider than a float holds"):
+            weighted_sweep(table, ["a", "b"])
 
 
 class TestMaximizedObjectiveEntersAsItsNormalizedValue:
@@ -565,14 +683,39 @@ class TestSimplexGridForMoreObjectives:
         assert first.supported == second.supported
         assert first.unsupported == second.unsupported
 
-    def test_supported_and_unsupported_partition_the_front(self):
+    def test_the_support_classes_partition_the_front(self):
         table = self.table(3)
         sweep = weighted_sweep(table, ["x0", "x1", "x2"])
         front = tuple(int(r) for r in np.flatnonzero(nondominated(table, ["x0", "x1", "x2"])))
-        assert tuple(sorted(sweep.supported + sweep.unsupported)) == front
-        assert sweep.weakly_supported == ()
-        winners = sorted({r for _, rows in sweep.grid for r in rows})
+        together = sweep.supported + sweep.weakly_supported + sweep.unsupported
+        assert tuple(sorted(together)) == front
+        assert len(set(together)) == len(together)
+        values = sweep.normalized.values
+        winners = sorted({r for _, rows in sweep.grid for r in rows
+                          if (values[list(rows)] == values[rows[0]]).all()})
         assert list(sweep.supported) == winners
+
+    def test_a_row_that_only_ties_at_a_vertex_is_weakly_supported(self):
+        """
+        Row 0 reaches the minimum only at w = (1, 0, 0), tied with rows 1 and 2 on x = 0;
+        at every other weight min(w_y, w_z) < 0.6 (w_y + w_z) and it loses.
+        """
+        table = {"x": [0.0, 0.0, 0.0, 1.0], "y": [0.6, 0.0, 1.0, 0.0],
+                 "z": [0.6, 1.0, 0.0, 0.0]}
+        sweep = weighted_sweep(table, ["x", "y", "z"], resolution=20)
+        assert sweep.supported == (1, 2, 3)
+        assert sweep.weakly_supported == (0,)
+        assert sweep.unsupported == ()
+        assert [rows for _, rows in sweep.grid if 0 in rows] == [(0, 1, 2)]
+
+    def test_exact_duplicates_win_together(self):
+        """Rows 0 and 1 are one point: the minimum of x alone at w = (1, 0, 0) is a win."""
+        table = {"x": [0.0, 0.0, 1.0, 1.0], "y": [1.0, 1.0, 0.0, 1.0],
+                 "z": [1.0, 1.0, 1.0, 0.0]}
+        sweep = weighted_sweep(table, ["x", "y", "z"], resolution=4)
+        assert sweep.grid[-1] == ((1.0, 0.0, 0.0), (0, 1))
+        assert sweep.supported == (0, 1, 2, 3)
+        assert sweep.weakly_supported == ()
 
 
 class TestEpsilonConstraint:

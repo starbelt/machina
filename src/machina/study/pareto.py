@@ -38,7 +38,11 @@ Normalization and scalarization
 -------------------------------
 ``x̂ = (x - ideal) / (nadir - ideal)`` per objective, in the (logged) objective
 space. The ideal is the best value over the reference rows; the nadir is the
-worst value over the reference front (or over all reference rows). One formula
+worst value over the reference front (or over all reference rows). When the
+front has no spread on an objective (one reference row is best on it and
+dominates the rest), that objective's nadir is taken over all reference rows;
+when the reference rows all agree on it, it is degenerate (see
+:func:`normalize`). One formula
 serves both senses: x̂ = 0 at the ideal and 1 at the nadir whether the
 objective is minimized or maximized (for a maximized objective the
 denominator is negative). Rows outside the reference set, such as an oracle
@@ -64,6 +68,7 @@ deterministic simplex grid of weights instead.
 This module depends on numpy only.
 """
 
+import math
 import numbers
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -118,9 +123,13 @@ class Normalized:
 
     ``values`` is ``(n, m)``: 0 at the ideal, 1 at the nadir for every objective
     whatever its sense, NaN in excluded rows. ``ideal`` and ``nadir`` are ``(m,)``
-    in the (logged) objective space. ``degenerate`` names the objectives whose
-    ideal equals their nadir; their column is 0 in every valid row. The arrays
-    are read-only; equality is identity.
+    in the (logged) objective space. ``nadir_fallback`` names the objectives
+    whose nadir over the reference front equalled their ideal and was therefore
+    taken over all reference rows (``nadir="front"`` only). ``degenerate`` names
+    the objectives whose ideal still equals their nadir: every reference row
+    has the same value. In their column a valid row at the ideal is 0.0, a row
+    worse than the ideal +inf and a row better than it -inf (only rows outside
+    ``over`` can be either). The arrays are read-only; equality is identity.
     """
 
     values: np.ndarray
@@ -128,6 +137,7 @@ class Normalized:
     nadir: np.ndarray
     objectives: tuple
     degenerate: tuple
+    nadir_fallback: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -198,6 +208,16 @@ def normalize(table, objectives, *, over=None, nadir="front", feasible=None) -> 
     (``nadir="front"``) or over all of them (``nadir="all"``). Values are
     computed in the logged space for log objectives. Rows outside ``over`` are
     normalized with the same ideal and nadir and may fall outside [0, 1].
+
+    Zero spans. With ``nadir="front"``, an objective whose front nadir equals
+    its ideal (one reference row is best on it and dominates the others) takes
+    its nadir over all reference rows instead and is listed in
+    ``nadir_fallback``. An objective whose nadir still equals its ideal (every
+    reference row has the same value) is listed in ``degenerate``: a valid row
+    at the ideal gets 0.0, a row worse than the ideal +inf and a row better
+    than it -inf (oriented by the sense), because no finite scale separates
+    them. An objective whose span is too wide for a float (``nadir - ideal``
+    overflows) is a ValueError naming it.
     """
     prepared = _prepare(table, objectives, feasible)
     return _normalize(prepared, over, nadir)
@@ -212,7 +232,9 @@ def weighted_sweep(table, objectives, *, over=None, among=None, nadir="front",
     the valid rows in ``among`` (a boolean mask or row indices; default
     ``over``, default all rows). Only candidates that are non-dominated among
     the candidates can win on an interval; dominated candidates appear in no
-    field.
+    field. A non-dominated candidate off the ideal of a degenerate objective
+    (x̂ = ±inf, see :func:`normalize`) is a ValueError: widen ``over`` or drop
+    the objective.
 
     Two objectives (exact): ``J_w = w·x̂_1 + (1 − w)·x̂_2`` for ``w`` in [0, 1].
     ``supported`` rows are the hull vertices, each the unique optimum (with its
@@ -228,10 +250,12 @@ def weighted_sweep(table, objectives, *, over=None, among=None, nadir="front",
     with ``parts`` a composition of ``resolution`` into m non-negative integers,
     in lexicographic order; C(resolution + m − 1, m − 1) points. Each grid point
     records every candidate within ``tol · max(1, |min J|)`` of the minimum.
-    ``supported`` is every row that wins somewhere on the grid;
-    ``weakly_supported`` is empty; ``unsupported`` is the rest of the
-    non-dominated candidates (a finer grid can move a row from unsupported to
-    supported).
+    The grid point is a win for those rows when they all sit at one point
+    (exact duplicates) and a tie when distinct points are recorded, as at a
+    simplex vertex where several rows share the best value of the one weighted
+    objective. ``supported`` rows win at some grid point; ``weakly_supported``
+    rows are recorded only at ties; ``unsupported`` is the rest of the
+    non-dominated candidates (a finer grid can promote a row to supported).
     """
     objs = _objectives(objectives)
     m = len(objs)
@@ -258,11 +282,19 @@ def weighted_sweep(table, objectives, *, over=None, among=None, nadir="front",
             "and excluded(table, objectives) for the rows that were dropped")
     rows = np.flatnonzero(_front(prepared.oriented, candidates))
     points = norm.values[rows]
-    if not np.isfinite(points).all():
-        bad = [objs[i].name for i in range(m) if not np.isfinite(points[:, i]).all()]
+    for i, o in enumerate(objs):
+        off = ~np.isfinite(points[:, i])
+        if not off.any():
+            continue
+        where = [int(r) for r in rows[off]]
+        if o.name in norm.degenerate:
+            raise ValueError(
+                f"weighted_sweep: the candidates differ on objective {o.name!r} (rows {where} "
+                f"are off the value every row in `over` shares), which has zero span over "
+                f"`over`; widen `over` to rows that differ on {o.name!r}, or drop the objective")
         raise ValueError(
-            f"weighted_sweep: normalized values overflow for {bad}; the ideal and nadir of "
-            "those objectives are too close to divide by -- drop the objective or widen `over`")
+            f"weighted_sweep: normalized {o.name!r} overflows at rows {where}; its ideal and "
+            "nadir are too close to divide by -- drop the objective or widen `over`")
 
     if m == 2:
         return _sweep_two(points, rows, tol, norm)
@@ -410,11 +442,17 @@ def _truthy(values, what) -> np.ndarray:
     if kind == "O":
         out = np.empty(len(values), dtype=bool)
         for i, value in enumerate(values):
-            if value is None or isinstance(value, (str, bytes)) or (
-                    isinstance(value, float) and np.isnan(value)):
-                raise ValueError(
-                    f"{what} holds {value!r} at row {i}; give True or False for every row")
-            out[i] = bool(value)
+            # ``value != value`` is NaN for every real type (np.float32 included).
+            refused = value is None or isinstance(value, (str, bytes)) or (
+                isinstance(value, numbers.Real) and value != value)
+            if not refused:
+                try:
+                    out[i] = bool(value)
+                    continue
+                except (TypeError, ValueError):  # pandas NA, arrays: no single truth value
+                    pass
+            raise ValueError(
+                f"{what} holds {value!r} at row {i}; give True or False for every row")
         return out
     raise TypeError(f"{what} is not boolean (dtype {values.dtype}); give True or False per row")
 
@@ -423,6 +461,15 @@ def _row_mask(spec, n, what) -> np.ndarray:
     """``None`` -> all rows; a boolean mask of length n; or a sequence of row indices."""
     if spec is None:
         return np.ones(n, dtype=bool)
+    if type(spec).__module__.startswith("pandas"):
+        spec = _pandas_rows(spec, what)
+    elif isinstance(spec, (list, tuple)):
+        # np.asarray([True, 0, 1]) is the int array [1, 0, 1]: refuse before it coerces.
+        flags = [isinstance(item, (bool, np.bool_)) for item in spec]
+        if any(flags) and not all(flags):
+            raise TypeError(
+                f"`{what}` mixes booleans and ints ({list(spec)!r}); give a boolean mask with "
+                "one entry per row or a list of int row positions, not both")
     array = np.asarray(spec)
     if array.ndim != 1:
         raise ValueError(f"`{what}` must be a 1-D boolean mask or a sequence of row indices")
@@ -444,6 +491,29 @@ def _row_mask(spec, n, what) -> np.ndarray:
             f"{[int(i) for i in array if i < 0 or i >= n]}")
     mask[array] = True
     return mask
+
+
+def _pandas_rows(spec, what) -> np.ndarray:
+    """A boolean pandas Series as a numpy mask; an Index or any other Series is refused."""
+    name = type(spec).__name__
+    advice = (f"pass a boolean mask aligned with the rows or positional ints (e.g. "
+              f"`{what}=np.flatnonzero(mask)`); labels are not positions")
+    if name.endswith("Index"):
+        raise TypeError(
+            f"`{what}` is a pandas {name}, whose entries are row labels, but `{what}` takes "
+            f"row positions; {advice}")
+    if name == "Series":
+        if spec.dtype.kind != "b":
+            raise TypeError(
+                f"`{what}` is a pandas Series of dtype {spec.dtype}; a Series is read only as "
+                f"a boolean mask, its values could be labels; {advice}")
+        values = spec.to_numpy()
+        if values.dtype.kind != "b":
+            raise TypeError(
+                f"`{what}` is a boolean pandas Series with missing values; give True or False "
+                "for every row")
+        return values
+    return spec
 
 
 def _objectives(objectives) -> tuple:
@@ -585,23 +655,44 @@ def _normalize(prepared, over, nadir) -> Normalized:
     signs = _signs(objs)
     best_first = prepared.logged * signs[None, :]
     ideal = best_first[reference].min(axis=0) * signs
-    basis = _front(prepared.oriented, reference) if nadir == "front" else reference
-    worst = best_first[basis].max(axis=0) * signs
+    worst_all = best_first[reference].max(axis=0) * signs
+    if nadir == "front":
+        worst = best_first[_front(prepared.oriented, reference)].max(axis=0) * signs
+    else:
+        worst = worst_all.copy()
 
+    valid = prepared.valid
     values = np.full((n, m), np.nan)
-    degenerate = []
+    degenerate, fallback = [], []
     for i, o in enumerate(objs):
-        span = worst[i] - ideal[i]
+        if worst[i] == ideal[i] and worst_all[i] != ideal[i]:
+            # The front collapses to the ideal on this objective: one reference row is best
+            # on it and dominates the rest. Scale it by every reference row instead.
+            worst[i] = worst_all[i]
+            fallback.append(o.name)
+        span = float(worst[i]) - float(ideal[i])  # Python floats: an overflow is inf, silently
+        if not math.isfinite(span):
+            raise ValueError(
+                f"normalize: objective {o.name!r} runs from {float(ideal[i])!r} (ideal) to "
+                f"{float(worst[i])!r} (nadir) over `over`, a span wider than a float holds; "
+                f"rescale the column {o.name!r} or, if it is positive, compare it with "
+                f"Objective({o.name!r}, log=True)")
+        column = prepared.logged[valid, i]
         if span == 0.0:
-            values[prepared.valid, i] = 0.0
+            # Every reference row sits at the ideal: 0 there, ±inf off it (by sense).
             degenerate.append(o.name)
+            worse = column > ideal[i] if o.sense == "min" else column < ideal[i]
+            better = column < ideal[i] if o.sense == "min" else column > ideal[i]
+            out = np.zeros(len(column))
+            out[worse] = np.inf
+            out[better] = -np.inf
+            values[valid, i] = out
         else:
             # "+ 0.0" turns the -0.0 of a maximized objective's ideal row into 0.0.
-            values[prepared.valid, i] = (
-                (prepared.logged[prepared.valid, i] - ideal[i]) / span + 0.0)
+            values[valid, i] = (column - ideal[i]) / span + 0.0
     for array in (values, ideal, worst):
         array.flags.writeable = False
-    return Normalized(values, ideal, worst, objs, tuple(degenerate))
+    return Normalized(values, ideal, worst, objs, tuple(degenerate), tuple(fallback))
 
 
 def _cross(o, a, b) -> float:
@@ -691,6 +782,7 @@ def _compositions(total, parts):
 def _sweep_grid(points, rows, resolution, tol, norm) -> WeightedSweep:
     m = points.shape[1]
     wins = np.zeros(len(rows), dtype=bool)
+    ties = np.zeros(len(rows), dtype=bool)
     grid = []
     for parts in _compositions(resolution, m):
         weights = tuple(p / resolution for p in parts)
@@ -699,14 +791,19 @@ def _sweep_grid(points, rows, resolution, tol, norm) -> WeightedSweep:
             value = value + w * points[:, i]
         envelope = value.min()
         tied = np.abs(value - envelope) <= tol * max(1.0, abs(envelope))
-        wins |= tied
+        at = points[tied]
+        if (at == at[0]).all():  # one point (with its exact duplicates): a win
+            wins |= tied
+        else:                    # distinct points on the minimum: a tie
+            ties |= tied
         grid.append((weights, tuple(int(r) for r in rows[tied])))
+    weak = ties & ~wins
     return WeightedSweep(
         segments=(),
         switch_points=(),
         supported=tuple(int(r) for r in rows[wins]),
-        weakly_supported=(),
-        unsupported=tuple(int(r) for r in rows[~wins]),
+        weakly_supported=tuple(int(r) for r in rows[weak]),
+        unsupported=tuple(int(r) for r in rows[~wins & ~weak]),
         grid=tuple(grid),
         normalized=norm,
     )

@@ -12,12 +12,17 @@ stable ABI. Importing this module registers the three factories;
 
 import math
 import numbers
+import sys
 
 import casadi as ca
 
 from machina.library.numerics import TINY
 from machina.library.registry import register
 from machina.model.descriptor import FunctionDescriptor
+
+# Cap on z = q * log(L / tau) in cost.loglogistic_goodput: exp(-z) underflows to 0 for
+# z > 745.2, so the cap changes no finite result and turns z = inf into G = 0, not NaN.
+_Z_MAX = 800.0
 
 
 @register('cost.sigmoid_goodput')
@@ -237,11 +242,23 @@ def make_loglogistic_goodput(*, q: float, tau: float) -> FunctionDescriptor:
 
     Numerics
     --------
-    Evaluated as 0.5 - 0.5 * tanh(z / 2) with z = q * log(max(L / tau, TINY)),
-    which equals 1 / (1 + exp(z)) but never forms exp(z): at a huge latency
-    exp(z) overflows to inf and the gradient becomes inf / inf = NaN. The
-    floor at TINY keeps log finite at L = 0, where the gradient is then 0. For
-    q < 1 the true gradient is unbounded as L -> 0+; the floor caps it.
+    Evaluated as G = exp(-softplus(z)) with z = q * log(max(L / tau, TINY)) and
+    softplus(z) = m + log(exp(-m) + exp(z - m)), m = max(z, 0). Neither
+    exponent is positive, so nothing overflows, and G keeps its relative
+    precision into the far tail: the value is 1 / (1 + exp(z)) to a few ulp for
+    the z it is given (z itself carries a rounding of order |z| * 1e-16).
+    1 / (1 + exp(z)) overflows exp(z) at a huge latency (gradient inf / inf =
+    NaN), and 0.5 - 0.5 * tanh(z / 2) cancels to 0 once tanh rounds to 1. The
+    partial derivative of softplus in m is exactly 0, so the gradient does not
+    depend on how max is differentiated at z = 0 (L = tau), where G = 0.5
+    exactly. z is capped at 800, beyond which exp(-z) has already underflowed
+    to 0, so an infinite latency gives G = 0 and gradient 0 instead of NaN.
+
+    The floor at TINY keeps log finite at L = 0: G(0) = 1 / (1 + TINY**q),
+    which is 1 to within 1e-8 for q >= 0.25 and rounds to 1.0 for q >= 0.5;
+    the thesis range is q >= 1. The gradient at L = 0 is 0; for q < 1 the true
+    gradient is unbounded as L -> 0+ and the floor caps it. A negative latency
+    is read as 0 (value G(0), gradient 0): the caller keeps latency >= 0.
 
     Sign convention
     ---------------
@@ -256,8 +273,10 @@ def make_loglogistic_goodput(*, q: float, tau: float) -> FunctionDescriptor:
     q = _positive(q, 'q', 'cost.loglogistic_goodput')
     tau = _positive(tau, 'tau', 'cost.loglogistic_goodput')
     latency = ca.SX.sym('latency')
-    z = q * ca.log(ca.fmax(latency / tau, TINY))
-    goodput = 0.5 - 0.5 * ca.tanh(0.5 * z)
+    z = ca.fmin(q * ca.log(ca.fmax(latency / tau, TINY)), _Z_MAX)
+    m = ca.fmax(z, 0.0)
+    softplus = m + ca.log(ca.exp(-m) + ca.exp(z - m))
+    goodput = ca.exp(-softplus)
     f = ca.Function('loglogistic_goodput', [latency], [goodput], ['latency'], ['goodput'])
     return FunctionDescriptor(f, description=f'Log-logistic goodput (q={q}, tau={tau})')
 
@@ -269,7 +288,9 @@ def loglogistic_shape(*, latency_at_90: float, latency_at_10: float) -> tuple:
 
     From (a / tau)**q = 1/9 and (b / tau)**q = 9: tau = sqrt(a * b) and
     q = ln(81) / ln(b / a). Both latencies must be positive, in the same
-    unit, with latency_at_90 < latency_at_10.
+    unit, with latency_at_90 < latency_at_10. Where a * b overflows or
+    underflows, tau is formed as sqrt(a) * sqrt(b) and q from
+    ln(b) - ln(a) when b / a overflows.
     """
     a = _positive(latency_at_90, 'latency_at_90', 'loglogistic_shape')
     b = _positive(latency_at_10, 'latency_at_10', 'loglogistic_shape')
@@ -277,7 +298,15 @@ def loglogistic_shape(*, latency_at_90: float, latency_at_10: float) -> tuple:
         raise ValueError(
             f"loglogistic_shape: latency_at_90 ({a}) must be smaller than "
             f"latency_at_10 ({b}); value falls as latency grows.")
-    return math.sqrt(a * b), math.log(81.0) / math.log(b / a)
+    # sqrt(a * b) rounds once less (600, 5400 give exactly 1800); use it while a * b is normal.
+    product = a * b
+    if sys.float_info.min <= product < math.inf:
+        tau = math.sqrt(product)
+    else:
+        tau = math.sqrt(a) * math.sqrt(b)
+    ratio = b / a
+    log_ratio = math.log(ratio) if math.isfinite(ratio) else math.log(b) - math.log(a)
+    return tau, math.log(81.0) / log_ratio
 
 
 def _positive(value, name: str, where: str) -> float:
