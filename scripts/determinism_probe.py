@@ -19,7 +19,8 @@ structural zeros, which is what makes :func:`machina.codegen.dense`
 necessary), a small params table through ``sync.apply``, the coverage NLP of
 ``machina.astro`` compiled through ``Problem``, the study layer (the coverage
 graph as one ``Evaluator`` function, a Pareto analysis of a fixed table, and a
-``SweepTable`` CSV), and a ``MANIFEST.json`` merged from the per-stage blocks. Nothing is differentiated before it is serialised:
+``SweepTable`` CSV), the ``swapc`` power budget NLP compiled through ``Problem``, and
+a ``MANIFEST.json`` merged from the per-stage blocks. Nothing is differentiated before it is serialised:
 CasADi caches derivative Functions inside the objects that ``serialize()``
 writes, so the NLP is taken from ``nlp_expressions()`` before ``build()`` ever
 constructs a solver.
@@ -40,6 +41,8 @@ from machina.model import Aggregation, Builder, Component, Declaration, Scope, S
 from machina.params import ParamRegistry, param, sync, table
 from machina.sim import build_step_function
 from machina.study import Evaluator, Objective, SweepTable, nondominated, weighted_sweep
+from machina.swapc import ComputeLoad, PowerBudget
+from machina.swapc import signals as swapc_signals
 
 __all__ = ["run", "ARTIFACTS"]
 
@@ -245,6 +248,40 @@ def write_study(out: Path) -> dict:
     }}
 
 
+# --- stage 5: the swapc power budget through Problem ---------------------------------------------
+
+def power_problem() -> Problem:
+    """One ComputeLoad and a PowerBudget at the root, minimizing the array area; compiled,
+    never built."""
+    reg = SignalRegistry()
+    swapc_signals.declare_into(reg)
+    problem = Problem([ComputeLoad(), PowerBudget()], registry=reg, verbose=False)
+    problem.compile()
+    problem.add_cost(problem.expr("array_area").symbol, name="array_area")
+    return problem
+
+
+def write_power(out: Path) -> dict:
+    """The power-budget NLP as one serialised Function plus its names, like the coverage stage."""
+    backend = power_problem().backend
+    nlp = backend.nlp_expressions()
+    fn = ca.Function("power_nlp", [nlp["x"], nlp["p"]], [nlp["f"], nlp["g"]],
+                     ["x", "p"], ["f", "g"])
+    folder = out / "power"
+    _write(folder / "power_nlp.casadi", fn.serialize())
+    names = {
+        "variables": [_entry(r) for r in backend.variables()],
+        "parameters": [_entry(r) for r in backend.parameters()],
+        "constraints": [_entry(r) for r in backend.constraints()],
+        "costs": [r.name for r in backend.cost_terms()],
+    }
+    _write(folder / "names.json", json.dumps(names, indent=2, sort_keys=True) + "\n")
+    return {"power": {
+        "n_x": backend.n_x, "n_p": backend.n_p, "n_g": backend.n_g,
+        "files": {name: sha256_of(folder / name) for name in ("power_nlp.casadi", "names.json")},
+    }}
+
+
 # --- the probe --------------------------------------------------------------------------------
 
 # (stage name, writer). A writer builds its artifacts under ``out`` and returns the block it
@@ -254,6 +291,7 @@ ARTIFACTS = (
     ("params", write_params),
     ("coverage", write_coverage),
     ("study", write_study),
+    ("power", write_power),
 )
 
 

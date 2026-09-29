@@ -54,9 +54,9 @@ def _import_packs():
     import machina.library  # noqa: F401  (registers the generic factories)
     import machina.rigid  # noqa: F401  (declares ned/frd and the rigid-body signals)
     # isort: split
-    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh, coverage_total; 10 factories)
+    import machina.astro  # noqa: F401  (declares eci/ecef/lvlh, coverage_total; its factories)
     # isort: split
-    import machina.swapc  # noqa: F401  (registers the goodput and latency factories)
+    import machina.swapc  # noqa: F401  (declares power_load, battery_energy; goodput/latency/power)
 
 
 if HAS_CASADI:

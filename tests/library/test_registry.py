@@ -95,13 +95,16 @@ class TestRegistry:
 
 class TestRegistryCounts:
 
-    def test_geometry_domain_has_two_functions(self):
-        """geometry domain has ground_target_eci and elevation_angle."""
+    def test_geometry_domain_has_four_functions(self):
+        """geometry domain: ground_target_eci and elevation_angle (Phase 3a),
+        rn_min_separation and off_axis_angle (Phase 4c)."""
         geo_funcs = registry.list_by_domain('geometry')
-        assert set(geo_funcs) == {
-            'geometry.ground_target_eci',
+        assert geo_funcs == [
             'geometry.elevation_angle',
-        }
+            'geometry.ground_target_eci',
+            'geometry.off_axis_angle',
+            'geometry.rn_min_separation',
+        ]
 
     def test_cost_domain_includes_smooth_coverage(self):
         """cost domain includes smooth_coverage alongside existing functions."""

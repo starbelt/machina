@@ -522,8 +522,8 @@ class TestPropagateUniversal:
         assert abs(dt_opt - dt_quarter) < 60.0   # within 60 s of analytical quarter period
 
     def test_transform_registry_count(self):
-        """After Phase 3b there should be 7 transform.* entries."""
+        """Phase 3b's 7 transform.* entries plus Phase 4c's transform.roe_to_rtn."""
         transforms = registry.list_by_domain('transform')
-        assert len(transforms) == 7, (
-            f"Expected 7 transform factories, got {len(transforms)}: {transforms}"
+        assert len(transforms) == 8, (
+            f"Expected 8 transform factories, got {len(transforms)}: {transforms}"
         )

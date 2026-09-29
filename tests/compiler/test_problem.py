@@ -846,6 +846,64 @@ class TestEditableData:
         assert "'a/duty'" in str(err.value)
 
 
+BOUNDED = Quantity("probe", unit="s", role=Role.PARAMETER, default=1.0, lb=0.0, ub=10.0,
+                   doc="A bounded parameter", provenance="A", source="fixture")
+
+
+class TestParameterBoundsAreEnforced:
+    """A parameter's lb/ub held nowhere: the swapc review swept eclipse_duration = -100 s."""
+
+    def test_solve_refuses_a_value_below_the_lower_bound(self):
+        problem = probe(BOUNDED).compile().build()
+        with pytest.raises(ValueError, match=r"solve\(values=\.\.\.\): parameter 'probe' = -1\.0 "
+                                             r"is outside its bounds \[0\.0, 10\.0\].*"
+                                             r"Quantity\('probe', lb=\.\.\., ub=\.\.\.\) in "
+                                             r"knob_probe's declaration"):
+            problem.solve(values={"probe": -1.0})
+
+    def test_set_value_refuses_a_value_above_the_upper_bound_and_stores_nothing(self):
+        problem = probe(BOUNDED).compile().build()
+        with pytest.raises(ValueError, match=r"set_value: parameter 'probe' = 11\.0 is outside"):
+            problem.set_value("probe", 11.0)
+        np.testing.assert_allclose(problem.backend.parameter_value("probe"), [1.0], rtol=0)
+
+    def test_compile_refuses_a_value_outside_the_bounds(self):
+        with pytest.raises(ValueError, match=r"compile\(\): parameter 'probe' = 12\.0 is outside"):
+            probe(BOUNDED).compile(values={"probe": 12.0})
+
+    def test_the_bounds_themselves_are_inside(self):
+        problem = probe(BOUNDED).compile().build()
+        assert problem.solve(values={"probe": 0.0}).success
+        problem.set_value("probe", 10.0)
+        assert problem.solve().success
+
+    def test_params_table_limits_bound_an_open_parameter(self, tmp_path):
+        quantity = Quantity("probe", unit="W", role=Role.PARAMETER, param="COMPUTE_W")
+        problem = probe(quantity).compile(values=params_table(tmp_path)).build()
+        np.testing.assert_allclose(problem.parameter_bounds["probe"], [[0.0], [500.0]], rtol=0)
+        with pytest.raises(ValueError, match=r"'probe' = 600\.0 is outside its bounds "
+                                             r"\[0\.0, 500\.0\].*params table"):
+            problem.set_value("probe", 600.0)
+
+    def test_a_matrix_parameter_names_the_elements_outside(self):
+        quantity = Quantity("probe", shape=(2, 2), role=Role.PARAMETER, lb=0.0,
+                            default=[[1.0, 2.0], [3.0, 4.0]], provenance="A", source="fixture")
+        problem = probe(quantity, target=0.0).compile().build()
+        with pytest.raises(ValueError, match=r"column-major element\(s\) \[2\]: values \[-2\.0\]"):
+            problem.solve(values={"probe": [[1.0, -2.0], [3.0, 4.0]]})
+
+    def test_parameter_bounds_reports_every_parameter_in_declaration_order(self):
+        bounds = fleet().compile().parameter_bounds
+        assert list(bounds) == ["limit"]
+        np.testing.assert_array_equal(bounds["limit"], [[-np.inf], [np.inf]])
+
+    def test_a_nan_is_still_the_backends_error_not_a_bounds_error(self):
+        problem = probe(BOUNDED).compile().build()
+        with pytest.raises(ValueError, match="NaN") as err:
+            problem.solve(values={"probe": float("nan")})
+        assert "outside" not in str(err.value)
+
+
 class TestLifecycle:
 
     def test_compiling_twice_is_refused(self):

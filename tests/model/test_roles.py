@@ -358,3 +358,80 @@ class TestTheBuilderItself:
     def test_order_requires_declare(self):
         with pytest.raises(ModelError, match="call declare"):
             _ = Builder(point_mass(), registry=make_registry()).order
+
+
+def reader_of(*references, name="Reader"):
+    """A component reading each reference as algebraic ``r0``, ``r1``, ... into ``separation``."""
+    return component(Declaration(algebraic=tuple((f"r{i}", ref) for i, ref in
+                                                 enumerate(references)),
+                                 produces=("separation",)), name=name)
+
+
+class TestOneComponentReadsAPathOnce:
+    """Two spellings of one path gave a budget the same load twice (swapc review, 55 W for 45)."""
+
+    def test_a_relative_and_an_absolute_spelling_of_one_path_are_refused(self):
+        with pytest.raises(ModelError, match=r"reader reads 'sat/force' twice: algebraic entries "
+                                             r"'r0' -> 'sat/force' and 'r1' -> '/sat/force'"):
+            declared([Scope("sat", point_mass()), reader_of("sat/force", "/sat/force")])
+
+    def test_a_bare_name_and_its_absolute_twin_are_refused(self):
+        with pytest.raises(ModelError, match=r"reads 'force' twice.*Remove one of the two"):
+            declared([*point_mass(), reader_of("force", "/force")])
+
+    def test_a_bare_name_climbing_out_of_a_scope_and_the_absolute_path_are_refused(self):
+        inner = Scope("probe", [reader_of("force", "/force")])
+        with pytest.raises(ModelError, match=r"probe/reader reads 'force' twice"):
+            declared([*point_mass(), inner])
+
+    def test_one_leaf_in_two_scopes_is_two_paths_and_fine(self):
+        builder = declared([Scope("sat_a", point_mass()), Scope("sat_b", point_mass()),
+                            reader_of("sat_a/force", "sat_b/force")])
+        assert builder.resolved("reader") == {"r0": "sat_a/force", "r1": "sat_b/force"}
+
+
+class TestComponentWiringChecks:
+    """``check_wiring``: a rule one component's semantics justify, run at declare()."""
+
+    def test_it_sees_its_path_its_reads_and_every_producer(self):
+        seen = []
+
+        class Probe(Component):
+            def declare(self):
+                return Declaration(algebraic=(("f", "force"),), produces=("separation",))
+
+            def build(self, helpers):
+                return {}
+
+            def check_wiring(self, path, resolved, producers):
+                seen.append((path, resolved, producers))
+
+        declared([Scope("sat", [*point_mass(), Probe()])])
+        [(path, resolved, producers)] = seen
+        assert path == "sat/probe"
+        assert resolved == {"f": "sat/force"}
+        assert producers["sat/force"] == ("sat/thruster",)
+        assert producers["sat/pos"] == ("sat/kinematics",)
+
+    def test_its_error_refuses_the_model(self):
+        class Refuser(Component):
+            def declare(self):
+                return Declaration(produces=("separation",))
+
+            def build(self, helpers):
+                return {}
+
+            def check_wiring(self, path, resolved, producers):
+                raise ModelError(f"{path}: refused")
+
+        builder = Builder([*point_mass(), Refuser()], registry=make_registry())
+        with pytest.raises(ModelError, match="refuser: refused"):
+            builder.declare()
+        with pytest.raises(ModelError, match="call declare"):
+            _ = builder.order
+
+    def test_the_builder_itself_lets_a_reduced_body_read_zero_beside_a_thrusting_one(self):
+        """Why the child-scope rule is PowerBudget's, not the builder's: this model is fine."""
+        builder = declared([Kinematics(), Dynamics(), MassSource(), Scope("sat", point_mass())])
+        assert builder.resolved("dynamics")["force"] == "force"
+        assert builder.unproduced_sums == ["force"]

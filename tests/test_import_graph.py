@@ -48,11 +48,14 @@ GENERIC_FACTORIES = (
     "constraint.linear", "cost.least_squares", "cost.quadratic", "cost.rosenbrock",
     "util.rotate_x", "util.rotate_y", "util.rotate_z", "util.sum")
 ASTRO_FACTORIES = (
-    "cost.smooth_coverage", "geometry.elevation_angle", "geometry.ground_target_eci",
-    "transform.koe_to_mee", "transform.lagrange_coefficients", "transform.mee_to_eci",
-    "transform.mee_to_koe", "transform.propagate_universal", "transform.stumpff_cs",
-    "transform.universal_kepler")
+    "cost.mean_beam_duty", "cost.smooth_coverage", "cost.smooth_in_cone",
+    "geometry.elevation_angle", "geometry.ground_target_eci", "geometry.off_axis_angle",
+    "geometry.rn_min_separation", "transform.koe_to_mee", "transform.lagrange_coefficients",
+    "transform.mee_to_eci", "transform.mee_to_koe", "transform.propagate_universal",
+    "transform.roe_to_rtn", "transform.stumpff_cs", "transform.universal_kepler",
+    "util.synodic_period")
 SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.loglogistic_goodput", "cost.sigmoid_goodput",
+                   "util.battery_energy", "util.scene_compute_power", "util.solar_array_power",
                    "util.ttp_computation")
 
 
@@ -167,7 +170,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
         assert added(generic, astro) == list(ASTRO_FACTORIES), (
             f"`import machina.astro` added {added(generic, astro)}; expected exactly "
             f"{list(ASTRO_FACTORIES)}. src/machina/astro/__init__.py imports the modules that "
-            f"register them (transforms, geometry, coverage)")
+            f"register them (transforms, geometry, coverage, relative, beam)")
         assert not added(astro, generic), f"`import machina.astro` removed {added(astro, generic)}"
 
     def test_import_machina_swapc_adds_its_factories(self):
@@ -175,7 +178,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
         assert added(astro, swapc) == list(SWAPC_FACTORIES), (
             f"`import machina.swapc` added {added(astro, swapc)}; expected exactly "
             f"{list(SWAPC_FACTORIES)}. src/machina/swapc/__init__.py imports the modules that "
-            f"register them (goodput, latency)")
+            f"register them (goodput, latency, power)")
         assert not added(swapc, astro), f"`import machina.swapc` removed {added(swapc, astro)}"
 
 
