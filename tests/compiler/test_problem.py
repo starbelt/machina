@@ -726,6 +726,61 @@ class TestResolvingWithoutARebuild:
         np.testing.assert_allclose(warm["a/duty"], cold["a/duty"], rtol=1e-5)
 
 
+class TestSolveInitialGuess:
+    """``solve(x0=...)``: a per-call starting point, read back with a zero-iteration solve."""
+
+    @staticmethod
+    def frozen():
+        """The probe with IPOPT stopped before its first step: the result is the start."""
+        quantity = Quantity("probe", default=1.0, provenance="A", source="fixture")
+        return probe(quantity, solver_opts={"ipopt.max_iter": 0}).compile().build()
+
+    def test_x0_is_the_starting_point_of_that_call(self):
+        result = self.frozen().solve(x0={"free": 4.0})
+        np.testing.assert_allclose(result["free"], [4.0], rtol=1e-12)
+        np.testing.assert_allclose(result["probe"], [1.0], rtol=1e-12)
+
+    def test_x0_is_not_stored(self):
+        problem = self.frozen()
+        problem.solve(x0={"free": 4.0})
+        np.testing.assert_allclose(record_for(problem, "free").x0, [0.0], atol=0.0)
+        np.testing.assert_allclose(problem.solve()["free"], [0.0], atol=0.0)
+
+    def test_x0_wins_over_a_warm_starts_primal_values(self):
+        problem = probe(Quantity("probe", default=1.0, provenance="A", source="fixture"))
+        problem.compile().build()
+        base = problem.solve()
+        np.testing.assert_allclose(base["free"], [2.0], rtol=1e-6)
+        frozen = self.frozen()
+        result = frozen.solve(warm_start=base, x0={"free": -3.0})
+        np.testing.assert_allclose(result["free"], [-3.0], rtol=1e-12)
+        np.testing.assert_allclose(result["probe"], base["probe"], rtol=1e-12)
+
+    def test_x0_starts_a_real_solve_that_still_converges(self):
+        problem = fleet().compile().build()
+        result = problem.solve(x0={"a/duty": 0.9, "b/duty": 0.2})
+        assert result.success
+        np.testing.assert_allclose(result["a/duty"], [0.75], rtol=1e-6)
+
+    def test_x0_refuses_a_parameter_and_names_the_role(self):
+        problem = fleet().compile().build()
+        with pytest.raises(ValueError, match="'parameter'") as err:
+            problem.solve(x0={"limit": 100.0})
+        assert "solve(x0=...)" in str(err.value)
+        assert "'a/duty'" in str(err.value)
+
+    def test_x0_refuses_an_unknown_path_listing_the_variables(self):
+        problem = fleet().compile().build()
+        with pytest.raises(ValueError, match="not a quantity") as err:
+            problem.solve(x0={"a/dutyy": 0.5})
+        assert "'a/duty'" in str(err.value) and "'b/duty'" in str(err.value)
+
+    def test_x0_must_be_a_mapping(self):
+        problem = fleet().compile().build()
+        with pytest.raises(TypeError, match="mapping"):
+            problem.solve(x0=[0.5, 0.5])
+
+
 class TestDiscreteQuantities:
 
     def test_relax_mode_records_the_relaxed_quantity(self):

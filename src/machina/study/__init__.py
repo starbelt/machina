@@ -5,9 +5,11 @@ A study fills a table with one row per configuration (from a sweep, a replay
 evaluator, or a CSV of operating points) and reads trade-offs off it. Today the
 package holds the Pareto layer, :mod:`machina.study.pareto`: non-dominated
 sets, ideal/nadir normalization, the exact weighted-sum switch points between
-two objectives, and the epsilon-constraint pick; and the evaluator,
+two objectives, and the epsilon-constraint pick; the evaluator,
 :mod:`machina.study.evaluate`, which tabulates a model's signals at given leaf
-values without a solve.
+values without a solve; and the sweep, :mod:`machina.study.sweep`, which
+re-solves a Problem over a grid (warm-started) into a :class:`SweepTable` that
+the Pareto layer reads directly.
 
 ``import machina`` never imports this package; import it explicitly
 (``tests/test_import_graph.py`` enforces the split). It depends on numpy only.
@@ -27,9 +29,10 @@ from machina.study.pareto import (
     normalize,
     weighted_sweep,
 )
+from machina.study.sweep import SweepTable, sweep
 
 __all__ = [
-    "Evaluator",
+    "Evaluator", "sweep", "SweepTable",
     "Objective", "nondominated", "excluded", "normalize", "Normalized",
     "weighted_sweep", "WeightedSweep", "Segment", "epsilon_constraint",
 ]

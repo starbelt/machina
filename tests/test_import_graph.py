@@ -177,3 +177,46 @@ class TestPacksRegisterTheirFactoriesOnImport:
             f"{list(SWAPC_FACTORIES)}. src/machina/swapc/__init__.py imports the modules that "
             f"register them (goodput, latency)")
         assert not added(swapc, astro), f"`import machina.swapc` removed {added(swapc, astro)}"
+
+
+@functools.lru_cache(maxsize=1)
+def import_machina_study() -> tuple:
+    """Sorted module names after ``import machina.study`` in a fresh interpreter."""
+    out = run_python("import machina.study, sys; print(sorted(sys.modules))")
+    assert out.returncode == 0, (
+        f"`import machina.study` failed in a fresh interpreter; fix "
+        f"src/machina/study/__init__.py:\n{out.stderr}")
+    return tuple(ast.literal_eval(out.stdout.splitlines()[0]))
+
+
+class TestImportingMachinaStudy:
+    """``machina.study`` is a thin layer over the core: no pack, no heavy dependency.
+
+    A consumer that only reads a table of rows (a replay evaluator's output, a CSV of
+    operating points) must not pay for a domain pack, and pandas stays optional (the
+    ``study`` extra): ``SweepTable.to_pandas`` imports it on call.
+    """
+
+    STUDY_MODULES = ("machina.study.pareto", "machina.study.evaluate", "machina.study.sweep")
+
+    def test_the_study_modules_are_loaded(self):
+        modules = import_machina_study()
+        missing = [name for name in self.STUDY_MODULES if name not in modules]
+        assert not missing, (
+            f"`import machina.study` did not load {missing}; src/machina/study/__init__.py "
+            f"re-exports them")
+
+    def test_no_domain_pack_is_loaded(self):
+        modules = import_machina_study()
+        leaked = [name for name in PACKS if name in modules]
+        assert not leaked, (
+            f"`import machina.study` loaded the pack(s) {leaked}. The study layer names no "
+            f"domain; remove the pack import from src/machina/study/")
+
+    def test_no_heavy_dependency_is_loaded(self):
+        modules = import_machina_study()
+        leaked = [name for name in HEAVY_DEPENDENCIES if name in modules]
+        assert not leaked, (
+            f"`import machina.study` loaded {leaked}. pandas is imported inside "
+            f"SweepTable.to_pandas only, and matplotlib/networkx never; move the import "
+            f"into the function that needs it")
