@@ -24,9 +24,11 @@ lists the developer commands.
 
 Revived September 2026. The solver backend (Phase 1), the component graph and params pipeline
 absorbed from icarus-dynamics (Phase 2), and the `Problem` compiler with the `astro` and `swapc`
-packs (Phase 3) are in; about 1150 tests run on Python 3.10 and 3.12 in CI, together with every
-example and a two-process determinism gate. Next are `study` (sweeps) and `report` (LaTeX and
-Markdown tables and equations with provenance); see the Roadmap note in the vault.
+packs (Phase 3) are in, and so is the `study` layer (Phase 4a: sweeps, an evaluator, and the
+Pareto frontier with exact weight switch points); about 1400 tests run on Python 3.10 and 3.12 in
+CI, together with every example and a two-process determinism gate. Next are the thesis factories
+(power sizing, relative motion, beam duty) and `report` (LaTeX and Markdown tables and equations
+with provenance); see the Roadmap note in the vault.
 
 ## Install
 
@@ -39,8 +41,8 @@ make lint
 make examples
 ```
 
-Extras: `viz` (NetworkX + matplotlib for the NLP graph tool), `study` (pandas; reserved for the
-planned `study` layer), `dev` (everything plus pytest and ruff). The plotting examples need
+Extras: `viz` (NetworkX + matplotlib for the NLP graph tool), `study` (pandas, for
+`SweepTable.to_pandas`; the layer itself needs only numpy), `dev` (everything plus pytest and ruff). The plotting examples need
 matplotlib and three of them (`flyby_goodput.py`, `least_squares.py`, `rosenbrock_registry.py`)
 also NetworkX; both come with the `dev` and `viz` extras.
 
@@ -92,7 +94,10 @@ The examples in `examples/` all run headless (`make examples`). Two build on `Pr
 `fleet_budget.py` is the file to copy when you write your own component (two payloads in scopes,
 a budget that reads both by absolute path, roles and provenance, the shadow price of the cap),
 and `coverage_optimization.py` is the problem above with plots, the April 2026 prototype's recipe
-for comparison and the derived Keplerian elements. Four wire a `SolverBackend` by hand:
+for comparison and the derived Keplerian elements. `pareto_frontier.py` is a two-objective
+trade study on the `study` layer: `sweep` a power cap, then read the table with `nondominated`,
+`excluded` and `weighted_sweep` (exact switch points, and the non-convex stretch no weight ever
+picks). Four wire a `SolverBackend` by hand:
 `flyby_goodput.py` is a three-product goodput problem on a shared compute budget (the `swapc`
 pack's factories), `least_squares.py` shows matrix parameters, and `rosenbrock.py` and
 `rosenbrock_registry.py` write the same objective without and with the factory registry.
@@ -115,7 +120,8 @@ sets `MPLBACKEND=Agg`).
 | `src/machina/astro/` | frames `eci/ecef/lvlh`, MEE/KOE transforms, universal-variable Kepler, elevation geometry, smooth coverage, `SingleSatCoverage` | no — importing it declares its signals and registers `transform.*`, `geometry.*`, `cost.smooth_coverage` |
 | `src/machina/swapc/` | goodput and latency factories for the thesis cost function (budget signals and components come with the first consumer) | no — importing it registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `cost.loglogistic_goodput`, `util.ttp_computation` |
 | `src/machina/rigid/`, `src/machina/aero/` | frames `ned/frd`, rigid-body signals and quaternion kinematics (skeleton); placeholder | no |
-| `src/machina/report/` | planned (Phase 4): LaTeX/Markdown tables and equations of a compiled problem, with provenance | no |
+| `src/machina/study/` | `sweep`/`SweepTable` (warm-started grid re-solves, byte-stable CSV), `Evaluator` (a model's signals at given leaf values, no solve), the Pareto layer (`nondominated`, `excluded`, `normalize`, `weighted_sweep`, `epsilon_constraint`) over any table | no (import machina.study explicitly; numpy only, pandas on call) |
+| `src/machina/report/` | planned (Phase 4b): LaTeX/Markdown tables and equations of a compiled problem, with provenance | no |
 | `src/machina/viz.py` | NLP-level graph view used by three examples (needs the `viz` extra); a component-level graph with Mermaid/DOT export is planned | no |
 | `examples/`, `tests/`, `scripts/` | runnable examples; pytest suite; the determinism probe behind `make determinism` | — |
 
