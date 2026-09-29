@@ -26,9 +26,10 @@ Revived September 2026. The solver backend (Phase 1), the component graph and pa
 absorbed from icarus-dynamics (Phase 2), and the `Problem` compiler with the `astro` and `swapc`
 packs (Phase 3) are in, and so is the `study` layer (Phase 4a: sweeps, an evaluator, and the
 Pareto frontier with exact weight switch points); about 1400 tests run on Python 3.10 and 3.12 in
-CI, together with every example and a two-process determinism gate. Next are the thesis factories
-(power sizing, relative motion, beam duty) and `report` (LaTeX and Markdown tables and equations
-with provenance); see the Roadmap note in the vault.
+CI, together with every example and a two-process determinism gate. The thesis factories are in too
+(Phase 4c: SI power budget and array/battery sizing in `swapc`; period-matched e/i formations,
+R–N minimum separation, synodic ring period and beam duty in `astro`). Next is `report` (LaTeX and
+Markdown tables and equations with provenance); see the Roadmap note in the vault.
 
 ## Install
 
@@ -97,7 +98,10 @@ and `coverage_optimization.py` is the problem above with plots, the April 2026 p
 for comparison and the derived Keplerian elements. `pareto_frontier.py` is a two-objective
 trade study on the `study` layer: `sweep` a power cap, then read the table with `nondominated`,
 `excluded` and `weighted_sweep` (exact switch points, and the non-convex stretch no weight ever
-picks). Four wire a `SolverBackend` by hand:
+picks). `power_budget.py` sizes a solar array and battery around a compute load with the
+`swapc` power budget, and `formation_placement.py` places a companion beside a geostationary
+chief (relative e/i ellipse, minimum separation, time in the chief's antenna beam, and the
+synodic period that rules out a ring). Four wire a `SolverBackend` by hand:
 `flyby_goodput.py` is a three-product goodput problem on a shared compute budget (the `swapc`
 pack's factories), `least_squares.py` shows matrix parameters, and `rosenbrock.py` and
 `rosenbrock_registry.py` write the same objective without and with the factory registry.
@@ -117,8 +121,8 @@ sets `MPLBACKEND=Agg`).
 | `src/machina/units.py`, `src/machina/cli.py` | the SI unit allow-list that signals, quantities and params are checked against; the `machina params sync\|check` command line | `units.py` yes, `cli.py` no |
 | `src/machina/library/` | the factory registry and the generic factories (`cost.*`, `constraint.linear`, `util.*`), numeric guards | yes (registers the generic factories) |
 | `src/machina/sim/`, `src/machina/codegen/` | RK4 step function; dense C export, manifest merge, layout blocks | no (light; import machina.sim / machina.codegen explicitly) |
-| `src/machina/astro/` | frames `eci/ecef/lvlh`, MEE/KOE transforms, universal-variable Kepler, elevation geometry, smooth coverage, `SingleSatCoverage` | no — importing it declares its signals and registers `transform.*`, `geometry.*`, `cost.smooth_coverage` |
-| `src/machina/swapc/` | goodput and latency factories for the thesis cost function (budget signals and components come with the first consumer) | no — importing it registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `cost.loglogistic_goodput`, `util.ttp_computation` |
+| `src/machina/astro/` | frames `eci/ecef/lvlh`, MEE/KOE transforms, universal-variable Kepler, elevation geometry, smooth coverage, `SingleSatCoverage`; relative motion from e/i vectors, R–N minimum separation, synodic period, off-axis angle and beam duty | no — importing it declares its signals and registers `transform.*`, `geometry.*`, `cost.smooth_coverage`, `cost.smooth_in_cone`, `cost.mean_beam_duty`, `util.synodic_period` |
+| `src/machina/swapc/` | goodput and latency factories for the thesis cost function; the SI power budget (`ComputeLoad`, `PowerBudget`, signals `power_load`/`battery_energy`); a currency budget waits on a unit decision | no — importing it declares its signals and registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `cost.loglogistic_goodput`, `util.ttp_computation`, `util.scene_compute_power`, `util.solar_array_power`, `util.battery_energy` |
 | `src/machina/rigid/`, `src/machina/aero/` | frames `ned/frd`, rigid-body signals and quaternion kinematics (skeleton); placeholder | no |
 | `src/machina/study/` | `sweep`/`SweepTable` (warm-started grid re-solves, byte-stable CSV), `Evaluator` (a model's signals at given leaf values, no solve), the Pareto layer (`nondominated`, `excluded`, `normalize`, `weighted_sweep`, `epsilon_constraint`) over any table | no (import machina.study explicitly; numpy only, pandas on call) |
 | `src/machina/report/` | planned (Phase 4b): LaTeX/Markdown tables and equations of a compiled problem, with provenance | no |

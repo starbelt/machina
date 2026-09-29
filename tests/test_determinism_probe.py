@@ -49,7 +49,8 @@ class TestTheProbe:
         assert written == ["MANIFEST.json", "coverage/coverage_nlp.casadi",
                            "coverage/names.json", "params/params.csv",
                            "plant/f_system.casadi", "plant/g_system.casadi",
-                           "plant/plant_step.c", "study/evaluator.casadi",
+                           "plant/plant_step.c", "power/names.json", "power/power_nlp.casadi",
+                           "study/evaluator.casadi",
                            "study/frontier.json", "study/sweep.csv"]
 
     def test_every_stage_contributes_its_manifest_block(self, tmp_path):
