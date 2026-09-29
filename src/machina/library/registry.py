@@ -68,7 +68,8 @@ def get(name: str) -> Callable:
             "Pack factories register when their pack is imported: "
             "`import machina.astro` (transform.*, geometry.*, cost.smooth_coverage), "
             "`import machina.swapc` (cost.sigmoid_goodput, cost.aggregate_goodput, "
-            "cost.loglogistic_goodput, util.ttp_computation)."
+            "cost.loglogistic_goodput, util.ttp_computation, util.scene_compute_power, "
+            "util.solar_array_power, util.battery_energy)."
         )
     return _registry[name]
 

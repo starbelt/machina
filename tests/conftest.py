@@ -56,7 +56,7 @@ def _import_packs():
     # isort: split
     import machina.astro  # noqa: F401  (declares eci/ecef/lvlh, coverage_total; 10 factories)
     # isort: split
-    import machina.swapc  # noqa: F401  (registers the goodput and latency factories)
+    import machina.swapc  # noqa: F401  (declares power_load, battery_energy; goodput/latency/power)
 
 
 if HAS_CASADI:

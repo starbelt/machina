@@ -53,6 +53,7 @@ ASTRO_FACTORIES = (
     "transform.mee_to_koe", "transform.propagate_universal", "transform.stumpff_cs",
     "transform.universal_kepler")
 SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.loglogistic_goodput", "cost.sigmoid_goodput",
+                   "util.battery_energy", "util.scene_compute_power", "util.solar_array_power",
                    "util.ttp_computation")
 
 
@@ -175,7 +176,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
         assert added(astro, swapc) == list(SWAPC_FACTORIES), (
             f"`import machina.swapc` added {added(astro, swapc)}; expected exactly "
             f"{list(SWAPC_FACTORIES)}. src/machina/swapc/__init__.py imports the modules that "
-            f"register them (goodput, latency)")
+            f"register them (goodput, latency, power)")
         assert not added(swapc, astro), f"`import machina.swapc` removed {added(swapc, astro)}"
 
 
