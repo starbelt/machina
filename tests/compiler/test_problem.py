@@ -830,6 +830,14 @@ class TestLifecycle:
         assert [v.name for v in problem.backend.variables()] == ["probe", "free"]
         np.testing.assert_allclose(record_for(problem, "free").x0, [0.5], rtol=1e-12)
 
+    def test_is_compiled_and_is_built_follow_the_lifecycle(self):
+        problem = fleet()
+        assert (problem.is_compiled, problem.is_built) == (False, False)
+        problem.compile()
+        assert (problem.is_compiled, problem.is_built) == (True, False)
+        problem.build()
+        assert (problem.is_compiled, problem.is_built) == (True, True)
+
     def test_compile_and_build_return_the_problem_itself(self):
         problem = fleet()
         assert problem.compile() is problem

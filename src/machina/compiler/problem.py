@@ -116,6 +116,16 @@ class Problem:
     # --- properties -----------------------------------------------------------------------
 
     @property
+    def is_compiled(self) -> bool:
+        """True once ``compile()`` has run: ``builder``, ``backend`` and ``expr()`` work."""
+        return self._compiled
+
+    @property
+    def is_built(self) -> bool:
+        """True once ``build()`` has run: registration is locked and ``solve()`` works."""
+        return self._compiled and self._backend.is_built
+
+    @property
     def builder(self) -> Builder:
         """The declared :class:`~machina.model.Builder`, once ``compile()`` has run."""
         self._require_compiled("builder")
