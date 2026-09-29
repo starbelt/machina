@@ -18,9 +18,15 @@ A built :class:`~machina.compiler.Problem`
     ``solve(x0={path: v})`` (a warm start's primal values would otherwise put
     it at the previous point's value, outside its new bounds). The bounds and
     initial guess such a variable had before the sweep are restored when the
-    sweep ends, however it ends, so the Problem is left as it was found. A
-    ``FIXED`` quantity was folded into the NLP as a constant and cannot be
-    swept on this Problem.
+    sweep ends, however it ends, so the Problem is left as it was found. Every
+    value of a variable axis must lie inside the bounds the variable has
+    before the sweep, checked before the first solve: a pin outside them would
+    solve a point the model excludes and report it as a success, so widen the
+    bounds first (``problem.set_bounds`` or ``compile(overrides=...)``). An
+    axis takes one scalar per point, so only a scalar (1, 1) path can be an
+    axis: nothing is broadcast into a vector or a matrix. A ``FIXED``
+    quantity was folded into the NLP as a constant and cannot be swept on
+    this Problem.
 A callable
     ``target(**point)`` returns a compiled Problem per point, so an axis can
     change structure: a factory parameter baked into a component, a component
@@ -36,11 +42,14 @@ values, and duals when the layouts match). Across the rebuilds of a callable
 target the result comes from another Problem; the backend copies primal values
 by variable name where the element count matches and takes duals only when the
 whole layout is identical, so a changed layout costs the duals, not the solve.
-The one case the backend refuses -- a variable that kept its name and element
-count but changed shape, e.g. (2, 3) -> (3, 2) -- is checked first, and such a
-point starts cold. With ``retry_cold=True`` a warm-started point whose solve
-fails is solved again from the Problem's stored initial guess; the row records
-``retried=True`` and the retry's outcome.
+Such a point is seeded only when at least one of its variables has a namesake
+of the same shape in the previous result; with none (every variable renamed or
+resized) there is nothing to copy, and the point starts cold. The one case the
+backend refuses -- a variable that kept its name and element count but changed
+shape, e.g. (2, 3) -> (3, 2) -- is checked first, and such a point starts cold
+too. With ``retry_cold=True`` a warm-started point whose solve fails is solved
+again from the Problem's stored initial guess; the row records ``retried=True``
+and the retry's outcome.
 
 Rows
 ----
@@ -52,10 +61,13 @@ Columns, in order: the axis names; then
                   front over the table never picks up an unconverged iterate
                   (``keep_results=True`` keeps the raw result);
 ``iterations``    the solver's iteration count, ``None`` when the point raised;
-``warm_started``  the recorded solve was seeded with the previous point's result
-                  (``SolutionResult.warm_started`` is narrower: the plugin's
-                  warm-start solver ran, which needs identical layouts and
-                  finite duals);
+                  on a retried row, the cold retry's count only (the failed
+                  warm attempt is not added in), and ``t_wall`` likewise;
+``warm_started``  the recorded solve ran and was seeded with the previous
+                  point's result; ``False`` when the point raised before the
+                  solver returned (``SolutionResult.warm_started`` is narrower:
+                  the plugin's warm-start solver ran, which needs identical
+                  layouts and finite duals);
 ``retried``       a warm-started solve failed and a cold one was run;
 ``error``         ``None``, or ``"<Type>: <first line of the message>"`` when the
                   point raised;
@@ -76,9 +88,19 @@ shapes then fix the columns for every later point).
 
 Every point runs under ``try/except Exception``: an exception becomes a row with
 ``success=False``, ``status="error"`` and the message, and the sweep moves on;
-``raise_on_error=True`` re-raises it instead. A target that returns something
-other than a compiled Problem, and a bad ``collect`` entry, are refused outright,
-whatever ``raise_on_error`` says: every point would hit them.
+``raise_on_error=True`` re-raises it instead. That includes a solve that
+converged but whose ``collect`` values could not be read (a callable target
+whose collected quantity changed size): the row is an error row, with
+``iterations`` and ``t_wall`` ``None``, NaN in every collected column and no
+kept result. A target that returns something other than a compiled Problem,
+and a bad ``collect`` entry, are refused outright, whatever ``raise_on_error``
+says: every point would hit them.
+
+:meth:`SweepTable.to_csv` writes ``None`` and ``""`` the same way, as an empty
+cell, so a CSV read back cannot tell them apart; keep the table (or
+:meth:`SweepTable.as_columns`) where the difference matters. Build a table by
+hand with :meth:`SweepTable.from_rows`, which checks every row;
+``SweepTable(...)`` itself checks nothing but the length of ``results``.
 
 This module imports pandas only inside :meth:`SweepTable.to_pandas`.
 """
@@ -118,6 +140,11 @@ class SweepTable:
     ``rows`` one dict per point -- read-only by convention -- and ``results``
     the :class:`~machina.solver.SolutionResult` per row when the sweep ran with
     ``keep_results=True`` (``None`` for a point that raised), else ``None``.
+
+    Direct construction checks nothing but the length of ``results``: build a
+    table by hand with :meth:`from_rows`, which checks names, rows and values.
+    :meth:`to_csv` still refuses, cell by cell, anything it cannot write the
+    same way on every interpreter.
     """
 
     axes: tuple
@@ -146,7 +173,9 @@ class SweepTable:
         ``columns`` is the axes, then every other key in first-seen order;
         ``t_wall`` is kept in the rows but is not a column. Every row must hold
         every column (``None`` is an empty cell), and every value must be a
-        scalar: ``None``, a bool, a number or a string.
+        scalar: ``None``, a bool, a number or a string. No name or string may
+        hold a carriage return or a NUL, which the csv module writes
+        differently on Python 3.10 and 3.12.
         """
         if isinstance(axes, (str, bytes)) or isinstance(axes, Mapping):
             raise TypeError(
@@ -157,6 +186,7 @@ class SweepTable:
         for name in axes:
             if not isinstance(name, str) or not name:
                 raise TypeError(f"SweepTable.from_rows: axis names are strings, got {name!r}.")
+            _check_text(name, "SweepTable.from_rows: axis name")
         duplicated = [name for index, name in enumerate(axes) if name in axes[:index]]
         if duplicated:
             raise ValueError(f"SweepTable.from_rows: axes {duplicated} are given twice.")
@@ -179,6 +209,7 @@ class SweepTable:
                         f"SweepTable.from_rows: row {index} has the key {key!r}; column names "
                         f"are strings."
                     )
+                _check_text(key, f"SweepTable.from_rows: row {index}, column name")
                 if key != TIMING_COLUMN and key not in columns:
                     columns.append(key)
         plain = []
@@ -225,16 +256,23 @@ class SweepTable:
 
         Header = ``columns`` (then ``t_wall`` with ``include_timing=True``);
         ``\\n`` line ends; floats as ``repr(float(x))`` (``nan``, ``inf``);
-        bools ``True``/``False``; ints as themselves; ``None`` an empty cell;
+        bools ``True``/``False``; ints as themselves; ``None`` an empty cell --
+        the same as ``""``, so the two do not survive a round trip apart;
         strings as they are, quoted by the csv module only where they hold a
-        comma, a quote or a newline.
+        comma, a quote or a newline. A carriage return or a NUL in a column
+        name or a cell is refused before the file is opened: the csv module
+        writes both differently on Python 3.10 and 3.12.
         """
         names = self._names(include_timing)
+        for name in names:
+            if isinstance(name, str):
+                _check_text(name, "SweepTable.to_csv: column name")
+        cells = [[_cell(row.get(name), name, index) for name in names]
+                 for index, row in enumerate(self.rows)]
         with open(path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle, lineterminator="\n")
             writer.writerow(names)
-            for index, row in enumerate(self.rows):
-                writer.writerow([_cell(row.get(name), name, index) for name in names])
+            writer.writerows(cells)
 
     def to_pandas(self, *, include_timing=False):
         """The table as a pandas DataFrame, columns in order. pandas is imported here only."""
@@ -271,7 +309,9 @@ def sweep(target, axes, *, warm_start=True, retry_cold=True, collect=(), keep_re
                         ``(name, values)`` pairs. ``values`` is a list, tuple,
                         range or 1-D array of scalars (numbers, bools; strings for
                         a callable target). The grid is ``itertools.product`` in
-                        axis order: the last axis varies fastest.
+                        axis order: the last axis varies fastest. On a Problem
+                        target an axis is a scalar path, and a variable axis
+                        stays inside the variable's bounds.
         warm_start:     seed each point with the previous point's result when that
                         point succeeded.
         retry_cold:     solve a warm-started point that failed again, cold.
@@ -282,7 +322,8 @@ def sweep(target, axes, *, warm_start=True, retry_cold=True, collect=(), keep_re
                         recording it.
 
     Returns:
-        :class:`SweepTable`. The module docstring lists the columns.
+        :class:`SweepTable`. The module docstring lists the columns and how a
+        retried row, an error row and an empty CSV cell read.
     """
     grid = _axes(axes)
     names = tuple(name for name, _ in grid)
@@ -349,8 +390,8 @@ def _solve_point(driver, collector, point, previous, *, retry_cold, raise_on_err
     retried = False
     try:
         seed = previous if previous is not None and driver.seedable(problem, previous) else None
-        warm = seed is not None
         result = solve(seed)
+        warm = seed is not None                     # only once a solve has returned
         if warm and retry_cold and not result.success:
             warm, retried = False, True
             result = solve(None)
@@ -400,6 +441,7 @@ class _ProblemDriver:
             )
         roles = problem.roles
         free = [path for path, role in roles.items() if role in _SWEEPABLE]
+        builder = problem.builder
         self._problem = problem
         self._parameters, self._variables = [], []
         for name, values in grid:
@@ -418,6 +460,20 @@ class _ProblemDriver:
                     f"compile(roles={{{name!r}: 'parameter'}}) to sweep it without a rebuild, "
                     f"or pass a callable target that builds a Problem per point."
                 )
+            shape = tuple(builder.shape_of(name))
+            if shape != (1, 1):
+                if role is Role.PARAMETER:
+                    how = f"compile(values={{{name!r}: [e0, e1, ...]}})"
+                else:
+                    how = (f"compile(overrides={{{name!r}: {{'lb': v, 'ub': v, 'x0': v}}}}) "
+                           f"with v = [e0, e1, ...]")
+                raise ValueError(
+                    f"sweep axis {name!r} is a {role.value} of shape {shape}, and an axis gives "
+                    f"one scalar per grid point: nothing is broadcast into a vector or a matrix. "
+                    f"To sweep its elements, pass a callable target that takes one scalar "
+                    f"keyword per element and builds the Problem from them, e.g. "
+                    f"def target(e0, e1, ...): return Problem(...).{how}."
+                )
             for value in values:
                 if isinstance(value, str):
                     raise TypeError(
@@ -432,6 +488,33 @@ class _ProblemDriver:
             lb, ub = backend.bounds(path)
             self._saved[path] = (np.array(lb, dtype=float), np.array(ub, dtype=float),
                                  np.array(backend.initial_guess(path), dtype=float))
+        for name, values in grid:
+            if name in self._saved:
+                self._check_bounds(name, values)
+
+    def _check_bounds(self, path, values) -> None:
+        """Every value of a variable axis inside the bounds the variable has before the sweep.
+
+        ``fix()`` pins by the bounds, so a value outside them replaces the model's
+        own limit and the solve reports a success at a point the model excludes.
+        A NaN is left to ``fix()``, which refuses it at its point like a NaN
+        parameter value.
+        """
+        lb, ub, _ = self._saved[path]
+        low, high = float(lb.ravel()[0]), float(ub.ravel()[0])
+        outside = [value for value in values
+                   if not math.isnan(float(value)) and not low <= float(value) <= high]
+        if not outside:
+            return
+        pinned = (f" It is pinned (lb = ub), e.g. by problem.fix(); problem.unfix({path!r}) "
+                  f"restores its compiled bounds." if low == high else "")
+        raise ValueError(
+            f"sweep axis {path!r} has {outside} outside the bounds [{low!r}, {high!r}] the "
+            f"variable has before the sweep; pinning it there would solve a point the model "
+            f"excludes and report it as a success.{pinned} Widen the bounds before the sweep "
+            f"with problem.set_bounds({path!r}, lb=..., ub=...) (or compile(overrides="
+            f"{{{path!r}: {{'lb': ..., 'ub': ...}}}})), or drop those values from the axis."
+        )
 
     def make(self, point):
         return self._problem
@@ -502,21 +585,28 @@ class _CallableDriver:
         return solve
 
     def seedable(self, problem, result) -> bool:
-        """False when a variable kept its name and element count but changed shape.
+        """True when ``result`` has something to give ``problem`` and the backend can take it.
 
         The backend copies a previous result's primal values by name wherever the
-        element count matches, and cannot lay a (2, 3) value into a (3, 2) variable.
+        element count matches, and cannot lay a (2, 3) value into a (3, 2) variable:
+        such a shape change means cold. Otherwise the point is warm only when at
+        least one variable has a namesake of the same shape in ``result``; with
+        none, the seed would copy nothing, and the row would claim a warm start
+        that did not happen.
         """
         backend = problem.backend
         names = backend.variable_order()
-        for entry in result.x_layout:
-            if entry.name not in names:
+        matched = False
+        for name, value in result.x_opt.items():
+            if name not in names:
                 continue
-            shape = tuple(backend.shape_of(entry.name))
-            before = tuple(entry.shape)
-            if before != shape and before[0] * before[1] == shape[0] * shape[1]:
+            shape = tuple(backend.shape_of(name))
+            before = _natural_shape(value)
+            if before == shape:
+                matched = True
+            elif before[0] * before[1] == shape[0] * shape[1]:
                 return False
-        return True
+        return matched
 
     def restore(self) -> None:
         pass
@@ -546,6 +636,7 @@ class _Collector:
                     f"sweep(collect=...): {entry!r} is not an entry; give a path of the Problem "
                     f"or 'cost:<name>'."
                 )
+            _check_text(entry, "sweep(collect=...)")    # it names CSV columns
         duplicated = [entry for index, entry in enumerate(entries) if entry in entries[:index]]
         if duplicated:
             raise ValueError(f"sweep(collect=...) names {duplicated} twice; list each once.")
@@ -674,6 +765,7 @@ def _axes(axes) -> tuple:
                 f"sweep axis names are strings (an instance path, or a keyword of a callable "
                 f"target), got {name!r}."
             )
+        _check_text(name, "sweep axis name")        # it is a CSV column name
         if name in seen:
             raise ValueError(f"sweep axis {name!r} is given twice; merge its values into one axis.")
         seen.append(name)
@@ -717,11 +809,7 @@ def _scalar(value, what: str, *, allow_none=False):
     if value is None and allow_none:
         return None
     if isinstance(value, str):
-        if "\r" in value:
-            raise ValueError(
-                f"{what}: {value!r} holds a carriage return. Python 3.10 and 3.12 quote a bare "
-                f"'\\r' differently in CSV, which would break the byte-stable to_csv(); remove it."
-            )
+        _check_text(value, what)
         return value
     if isinstance(value, bool):
         return value
@@ -740,11 +828,7 @@ def _cell(value, column, index) -> str:
     if isinstance(value, (bool, np.bool_)):
         return "True" if value else "False"
     if isinstance(value, str):
-        if "\r" in value:
-            raise ValueError(
-                f"SweepTable.to_csv: row {index}, column {column!r} holds a carriage return, "
-                f"which Python 3.10 and 3.12 quote differently; remove it from the row."
-            )
+        _check_text(value, f"SweepTable.to_csv: row {index}, column {column!r}")
         return value
     if isinstance(value, numbers.Integral):
         return str(int(value))
@@ -756,12 +840,38 @@ def _cell(value, column, index) -> str:
     )
 
 
+def _check_text(text: str, what: str) -> None:
+    """Refuse the two characters the csv module writes differently on Python 3.10 and 3.12."""
+    if "\r" in text:
+        raise ValueError(
+            f"{what}: {text!r} holds a carriage return. Python 3.10 and 3.12 quote a bare "
+            f"'\\r' differently in CSV, which would break the byte-stable to_csv(); remove it."
+        )
+    if "\x00" in text:
+        raise ValueError(
+            f"{what}: {text!r} holds a NUL character. Python 3.10's csv module refuses to "
+            f"write it and 3.12 writes it as is, which would break the byte-stable to_csv(); "
+            f"remove it."
+        )
+
+
 def _describe(exc) -> str:
-    """``"<Type>: <first line>"``; ``splitlines`` also drops any ``\\r``."""
+    """``"<Type>: <first line>"``; ``splitlines`` drops any ``\\r``, and a NUL is spelled out.
+
+    The message is the sweep's own cell, so it is made writable rather than refused.
+    """
     lines = str(exc).splitlines()
-    first = lines[0].strip() if lines else ""
+    first = lines[0].strip().replace("\x00", "\\x00") if lines else ""
     name = type(exc).__name__
     return f"{name}: {first}" if first else name
+
+
+def _natural_shape(value) -> tuple:
+    """``(rows, cols)`` of a ``SolutionResult.x_opt`` value: 1-D is a column."""
+    array = np.asarray(value)
+    if array.ndim == 2:
+        return tuple(array.shape)
+    return (int(array.size), 1)
 
 
 def _optional_float(value):

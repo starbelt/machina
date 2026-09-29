@@ -113,6 +113,41 @@ class TestTheCsvIsByteStable:
         with pytest.raises(ValueError, match="carriage return"):
             table.to_csv(tmp_path / "table.csv")
 
+    # Python 3.12 quotes a bare '\r' in a header ('a,"b\rc"'), 3.10 does not ('a,b\rc');
+    # 3.10 raises on a NUL, 3.12 writes it. Each is refused, with the row and column named.
+
+    def test_a_carriage_return_in_a_column_name_is_refused(self):
+        with pytest.raises(ValueError, match=r"row 0, column name: 'b\\rc'.*carriage return"):
+            SweepTable.from_rows(("a",), [{"a": 1, "b\rc": 2}])
+
+    def test_a_carriage_return_in_an_axis_name_is_refused(self):
+        with pytest.raises(ValueError, match="axis name.*carriage return"):
+            SweepTable.from_rows(("a\rb",), [{"a\rb": 1}])
+
+    def test_a_nul_in_a_cell_is_refused_naming_the_row_and_column(self):
+        with pytest.raises(ValueError, match="row 1, column 'note'.*NUL"):
+            SweepTable.from_rows(("x",), [{"x": 1, "note": "ok"}, {"x": 2, "note": "a\x00b"}])
+
+    def test_a_nul_in_a_column_name_is_refused(self):
+        with pytest.raises(ValueError, match="row 0, column name.*NUL"):
+            SweepTable.from_rows(("a",), [{"a": 1, "b\x00c": 2}])
+
+    @pytest.mark.parametrize("columns, row, match", [
+        (("x", "b\rc"), {"x": 1, "b\rc": 2}, "column name.*carriage return"),
+        (("x", "b\x00c"), {"x": 1, "b\x00c": 2}, "column name.*NUL"),
+        (("x", "note"), {"x": 1, "note": "a\x00b"}, "row 0, column 'note'.*NUL"),
+    ])
+    def test_a_hand_made_table_is_refused_before_the_file_is_opened(self, tmp_path, columns,
+                                                                    row, match):
+        table = SweepTable(axes=("x",), columns=columns, rows=(row,))
+        with pytest.raises(ValueError, match=match):
+            table.to_csv(tmp_path / "table.csv")
+        assert not (tmp_path / "table.csv").exists()
+
+    def test_none_and_an_empty_string_write_the_same_cell(self, tmp_path):
+        SweepTable.from_rows(("x",), [{"x": None, "note": ""}]).to_csv(tmp_path / "table.csv")
+        assert (tmp_path / "table.csv").read_bytes() == b"x,note\n,\n"
+
 
 class TestTiming:
 

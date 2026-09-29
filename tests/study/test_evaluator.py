@@ -515,6 +515,12 @@ class TestTable:
         with pytest.raises(TypeError, match=r"\('a/power',\)"):
             Evaluator(fleet_builder()).table([{}], outputs="a/power")
 
+    def test_a_label_key_is_refused_with_the_way_to_carry_it(self):
+        with pytest.raises(ValueError, match=r"row 0 has \['label'\]") as err:
+            Evaluator(fleet_builder()).table([{"a/duty": 0.5, "label": "half"}])
+        assert "zip(labels, evaluator.table(rows))" in str(err.value)
+        assert "'a/duty'" in str(err.value)
+
     def test_a_bad_row_is_named_by_its_index(self):
         with pytest.raises(ValueError, match="row 1"):
             Evaluator(fleet_builder()).table([{"a/duty": 0.5}, {"a/dutyy": 0.5}])

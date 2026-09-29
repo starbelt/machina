@@ -293,13 +293,17 @@ class Evaluator:
                 for path, value in zip(self._outputs, out)}
 
     def table(self, rows, *, outputs=None) -> list:
-        """One dict per row, in row order: the row's own keys first, then the outputs.
+        """One dict per row, in row order: the row's leaf values first, then the outputs.
 
-        ``rows`` is a sequence of ``{leaf path: value}`` mappings; ``outputs``
-        picks output paths (default: all of them, in ``outputs`` order). A
-        size-1 output comes back as a Python ``float``, anything larger as an
-        array. An output that is also a key of the row keeps the row's
-        position and takes the evaluated value.
+        ``rows`` is a sequence of ``{leaf path: value}`` mappings, and every key
+        of every row must be a free leaf: a label or any other extra key is
+        refused like an unknown path, naming the row. Carry labels beside the
+        rows instead and pair them afterwards, e.g.
+        ``for label, entry in zip(labels, evaluator.table(rows))``.
+        ``outputs`` picks output paths (default: all of them, in ``outputs``
+        order). A size-1 output comes back as a Python ``float``, anything
+        larger as an array. An output that is also a key of the row (a leaf is
+        an output too) keeps the row's position and takes the evaluated value.
         """
         names = self._pick_outputs(outputs)
         if isinstance(rows, Mapping):
@@ -313,6 +317,14 @@ class Evaluator:
                 raise TypeError(
                     f"Evaluator.table(rows): row {index} is a {type(row).__name__}, not a "
                     f"mapping {{leaf path: value}}."
+                )
+            extra = [key for key in row if key not in self._shapes]
+            if extra:
+                raise ValueError(
+                    f"Evaluator.table(rows): row {index} has {extra}, which are not leaves of "
+                    f"this model. A row holds leaf values only; carry labels beside the rows "
+                    f"and pair them with the result, e.g. "
+                    f"zip(labels, evaluator.table(rows)). Free leaves: {list(self._leaves)}."
                 )
             try:
                 values = self(row)

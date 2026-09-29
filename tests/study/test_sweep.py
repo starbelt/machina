@@ -292,6 +292,15 @@ class TestAxesAreChecked:
         with pytest.raises(TypeError, match="not a number"):
             sweep(fleet(), {"limit": ["high"]})
 
+    def test_a_nul_in_a_string_value_is_refused_by_axis(self):
+        # It would become a CSV cell that Python 3.10 cannot write and 3.12 writes as is.
+        with pytest.raises(ValueError, match="'where'.*NUL"):
+            sweep(lambda where: pulled(1.0), {"where": ["near", "a\x00b"]})
+
+    def test_a_carriage_return_in_an_axis_name_is_refused(self):
+        with pytest.raises(ValueError, match="axis name.*carriage return"):
+            sweep(fleet(), {"lim\rit": [150.0]})
+
 
 class TestRoutingOnAProblem:
 
@@ -331,6 +340,55 @@ class TestRoutingOnAProblem:
         np.testing.assert_allclose(lb, [0.0], rtol=0.0)
         np.testing.assert_allclose(ub, [1.0], rtol=0.0)
         np.testing.assert_allclose(problem.backend.initial_guess("a/duty"), [0.1], rtol=0.0)
+
+    def test_a_variable_axis_outside_its_bounds_is_refused_before_any_solve(self):
+        # fix() pins by the bounds, so d_a = -0.5 or 1.5 used to solve "successfully" with a
+        # negative power draw, a point the model's 0 <= duty <= 1 excludes.
+        problem = fleet()
+        with pytest.raises(ValueError, match="'a/duty'") as err:
+            sweep(problem, {"a/duty": [-0.5, 0.5, 1.5]}, collect=["a/power"])
+        message = str(err.value)
+        assert "[-0.5, 1.5]" in message and "[0.0, 1.0]" in message
+        assert "problem.set_bounds('a/duty', lb=..., ub=...)" in message
+        assert "compile(overrides=" in message
+        assert not problem.backend.is_solved
+        lb, ub = problem.backend.bounds("a/duty")
+        np.testing.assert_allclose([lb[0], ub[0]], [0.0, 1.0], rtol=0.0)
+        np.testing.assert_allclose(problem.backend.initial_guess("a/duty"), [0.1], rtol=0.0)
+
+    def test_widened_bounds_let_the_values_through_and_are_restored(self):
+        problem = fleet()
+        problem.set_bounds("a/duty", lb=-1.0, ub=2.0)
+        table = sweep(problem, {"a/duty": [-0.5, 1.5]}, collect=["a/power"])
+        assert all(column(table, "success"))
+        np.testing.assert_allclose(column(table, "a/power"), [-50.0, 150.0], rtol=RTOL)
+        lb, ub = problem.backend.bounds("a/duty")
+        np.testing.assert_allclose([lb[0], ub[0]], [-1.0, 2.0], rtol=0.0)
+
+    def test_a_variable_pinned_before_the_sweep_points_to_unfix(self):
+        problem = fleet()
+        problem.fix("a/duty", 0.3)
+        with pytest.raises(ValueError, match=r"problem\.unfix\('a/duty'\)"):
+            sweep(problem, {"a/duty": [0.2, 0.3]})
+        lb, ub = problem.backend.bounds("a/duty")
+        np.testing.assert_allclose([lb[0], ub[0]], [0.3, 0.3], rtol=0.0)
+
+    @pytest.mark.parametrize("path, roles, shape", [
+        ("v/x", {}, "(3, 1)"),
+        ("m/x", {}, "(2, 2)"),
+        ("v/x", {"v/x": "parameter"}, "(3, 1)"),
+    ])
+    def test_an_axis_on_a_path_that_is_not_scalar_is_refused(self, path, roles, shape):
+        # A scalar used to be broadcast into every element by fix(), x0= and values=.
+        problem = Problem([Scope("m", [Tracker(MATRIX)]), Scope("v", [Tracker(VECTOR)])],
+                          registry=SignalRegistry(), verbose=False)
+        problem.compile(roles=roles, values={"v/x": [7.0, 8.0, 9.0]} if roles else None).build()
+        with pytest.raises(ValueError, match=f"'{path}'") as err:
+            sweep(problem, {path: [0.5, 2.0]})
+        message = str(err.value)
+        assert f"shape {shape}" in message
+        assert "nothing is broadcast" in message and "callable target" in message
+        assert not problem.backend.is_solved
 
     def test_a_discrete_axis_is_pinned_like_a_variable(self):
         problem = Problem([Pull(2.6)], registry=SignalRegistry(), verbose=False)
@@ -398,6 +456,12 @@ class TestWarmStarts:
         assert row["status"] == "Invalid_Number_Detected"
         assert math.isnan(row["objective"])
 
+    def test_a_retried_row_counts_and_times_the_cold_retry_only(self):
+        table = sweep(single(LogWall()), {"wall": [0.0, 5.0]}, keep_results=True)
+        row, result = table.rows[1], table.results[1]
+        assert row["retried"] and not result.warm_started
+        assert (row["iterations"], row["t_wall"]) == (result.iterations, result.t_wall)
+
     def test_a_retry_that_fails_too_keeps_the_retrys_outcome(self):
         table = sweep(fleet(), {"limit": [150.0, -10.0]})
         row = table.rows[1]
@@ -427,6 +491,22 @@ class TestFailures:
         assert failed["t_wall"] is None
         assert table.rows[2]["success"] and not table.rows[2]["warm_started"]
         assert [row["error"] for row in table.rows][::2] == [None, None]
+
+    def test_a_point_that_raised_before_its_solve_returned_is_not_warm(self):
+        # The NaN is refused inside solve(seed), before the solver runs: nothing was seeded.
+        table = sweep(fleet(), {"limit": [150.0, math.nan]}, keep_results=True)
+        row = table.rows[1]
+        assert (row["status"], row["iterations"]) == ("error", None)
+        assert (row["warm_started"], row["retried"]) == (False, False)
+
+    def test_a_nul_in_an_error_message_is_spelled_out(self, tmp_path):
+        def target(x):
+            if x < 0:
+                raise ValueError("bad\x00byte")
+            return pulled(x)
+        table = sweep(target, {"x": [-1.0]})
+        assert table.rows[0]["error"] == "ValueError: bad\\x00byte"
+        table.to_csv(tmp_path / "table.csv")
 
     def test_raise_on_error_re_raises(self):
         with pytest.raises(ValueError, match="NaN"):
@@ -528,12 +608,30 @@ class TestCallableTargets:
         assert all(column(table, "success"))
         np.testing.assert_allclose(table.results[0]["x"], [1.0, 2.0], rtol=RTOL)
         np.testing.assert_allclose(table.results[1]["x"], [1.0, 2.0, 3.0], rtol=RTOL)
-        assert column(table, "warm_started") == [False, True]   # seeded; nothing matched
+        assert column(table, "warm_started") == [False, False]  # x resized: nothing to copy
 
     def test_a_variable_that_changed_shape_starts_cold(self):
         table = sweep(lambda rows: tracker(np.ones((rows, 6 // rows))), {"rows": [2, 3]})
         assert column(table, "success") == [True, True]
         assert column(table, "warm_started") == [False, False]
+
+    def test_a_rebuild_with_no_variable_in_common_starts_cold(self):
+        # 'a/x' then 'b/x' then 'a/x': the previous result never names a variable of the next
+        # Problem, so a seed would copy nothing and the row used to claim a warm start.
+        def target(k):
+            return Problem([Scope("a" if k % 2 == 0 else "b", [Tracker([[1.0], [2.0]])])],
+                           registry=SignalRegistry(), verbose=False).compile()
+        table = sweep(target, {"k": [0, 1, 2]}, keep_results=True)
+        assert column(table, "success") == [True, True, True]
+        assert column(table, "warm_started") == [False, False, False]
+
+    def test_one_variable_in_common_is_enough_to_seed(self):
+        def target(n):
+            return Problem([Scope("kept", [Tracker([[1.0]])]),
+                            Scope("grown", [Tracker(np.ones((n, 1)))])],
+                           registry=SignalRegistry(), verbose=False).compile()
+        table = sweep(target, {"n": [2, 3]})
+        assert column(table, "warm_started") == [False, True]
 
     def test_collected_shapes_are_fixed_by_the_first_problem(self):
         table = sweep(lambda n: tracker(np.ones((n, 1))), {"n": [2, 3]}, collect=["x"])
