@@ -52,7 +52,8 @@ ASTRO_FACTORIES = (
     "transform.koe_to_mee", "transform.lagrange_coefficients", "transform.mee_to_eci",
     "transform.mee_to_koe", "transform.propagate_universal", "transform.stumpff_cs",
     "transform.universal_kepler")
-SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.sigmoid_goodput", "util.ttp_computation")
+SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.loglogistic_goodput", "cost.sigmoid_goodput",
+                   "util.ttp_computation")
 
 
 def run_python(code: str) -> subprocess.CompletedProcess:
@@ -161,7 +162,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
             f"generic factory modules; a domain factory belongs in its pack, which registers it "
             f"when the pack is imported")
 
-    def test_import_machina_astro_adds_its_ten_factories(self):
+    def test_import_machina_astro_adds_its_factories(self):
         generic, astro, _ = registered_after_each_import()
         assert added(generic, astro) == list(ASTRO_FACTORIES), (
             f"`import machina.astro` added {added(generic, astro)}; expected exactly "
@@ -169,10 +170,53 @@ class TestPacksRegisterTheirFactoriesOnImport:
             f"register them (transforms, geometry, coverage)")
         assert not added(astro, generic), f"`import machina.astro` removed {added(astro, generic)}"
 
-    def test_import_machina_swapc_adds_its_three_factories(self):
+    def test_import_machina_swapc_adds_its_factories(self):
         _, astro, swapc = registered_after_each_import()
         assert added(astro, swapc) == list(SWAPC_FACTORIES), (
             f"`import machina.swapc` added {added(astro, swapc)}; expected exactly "
             f"{list(SWAPC_FACTORIES)}. src/machina/swapc/__init__.py imports the modules that "
             f"register them (goodput, latency)")
         assert not added(swapc, astro), f"`import machina.swapc` removed {added(swapc, astro)}"
+
+
+@functools.lru_cache(maxsize=1)
+def import_machina_study() -> tuple:
+    """Sorted module names after ``import machina.study`` in a fresh interpreter."""
+    out = run_python("import machina.study, sys; print(sorted(sys.modules))")
+    assert out.returncode == 0, (
+        f"`import machina.study` failed in a fresh interpreter; fix "
+        f"src/machina/study/__init__.py:\n{out.stderr}")
+    return tuple(ast.literal_eval(out.stdout.splitlines()[0]))
+
+
+class TestImportingMachinaStudy:
+    """``machina.study`` is a thin layer over the core: no pack, no heavy dependency.
+
+    A consumer that only reads a table of rows (a replay evaluator's output, a CSV of
+    operating points) must not pay for a domain pack, and pandas stays optional (the
+    ``study`` extra): ``SweepTable.to_pandas`` imports it on call.
+    """
+
+    STUDY_MODULES = ("machina.study.pareto", "machina.study.evaluate", "machina.study.sweep")
+
+    def test_the_study_modules_are_loaded(self):
+        modules = import_machina_study()
+        missing = [name for name in self.STUDY_MODULES if name not in modules]
+        assert not missing, (
+            f"`import machina.study` did not load {missing}; src/machina/study/__init__.py "
+            f"re-exports them")
+
+    def test_no_domain_pack_is_loaded(self):
+        modules = import_machina_study()
+        leaked = [name for name in PACKS if name in modules]
+        assert not leaked, (
+            f"`import machina.study` loaded the pack(s) {leaked}. The study layer names no "
+            f"domain; remove the pack import from src/machina/study/")
+
+    def test_no_heavy_dependency_is_loaded(self):
+        modules = import_machina_study()
+        leaked = [name for name in HEAVY_DEPENDENCIES if name in modules]
+        assert not leaked, (
+            f"`import machina.study` loaded {leaked}. pandas is imported inside "
+            f"SweepTable.to_pandas only, and matplotlib/networkx never; move the import "
+            f"into the function that needs it")

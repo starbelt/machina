@@ -60,6 +60,7 @@ naming the call to make.
 
 import math
 import warnings
+from collections.abc import Mapping
 
 import casadi as ca
 import numpy as np
@@ -114,6 +115,16 @@ class Problem:
         self._eval_order = None
 
     # --- properties -----------------------------------------------------------------------
+
+    @property
+    def is_compiled(self) -> bool:
+        """True once ``compile()`` has run: ``builder``, ``backend`` and ``expr()`` work."""
+        return self._compiled
+
+    @property
+    def is_built(self) -> bool:
+        """True once ``build()`` has run: registration is locked and ``solve()`` works."""
+        return self._compiled and self._backend.is_built
 
     @property
     def builder(self) -> Builder:
@@ -344,12 +355,16 @@ class Problem:
         self._backend.build(opts, discrete_mode=self._discrete_mode)
         return self
 
-    def solve(self, *, values=None, warm_start=None):
-        """Solve, optionally overriding parameter values for this call only.
+    def solve(self, *, values=None, warm_start=None, x0=None):
+        """Solve, optionally overriding parameter values and initial guesses for this call only.
 
         ``values`` is ``{parameter path: value}``; it reaches the backend as
         ``solve(p_val=...)``, so a sweep costs no rebuild. ``warm_start`` is a
-        previous :class:`~machina.solver.SolutionResult`.
+        previous :class:`~machina.solver.SolutionResult`. ``x0`` is
+        ``{variable path: value}``, the starting point of those variables for
+        this call: laid over the stored initial guesses and over the primal
+        values a ``warm_start`` supplies, and never stored (use ``fix()`` or
+        ``compile(overrides={path: {"x0": ...}})`` for that).
         """
         self._require_built("solve")
         p_val = None
@@ -358,7 +373,18 @@ class Problem:
             for path, value in values.items():
                 self._check_role(path, Role.PARAMETER, "solve(values=...)")
                 p_val[path] = value.value if isinstance(value, ParamValue) else value
-        return self._backend.solve(p_val=p_val, warm_start=warm_start)
+        guess = None
+        if x0 is not None:
+            if not isinstance(x0, Mapping):
+                raise TypeError(
+                    f"solve(x0=...) takes a mapping {{variable path: value}}, got "
+                    f"{type(x0).__name__}. Write solve(x0={{'path': value}})."
+                )
+            guess = {}
+            for path, value in x0.items():
+                self._check_role(path, _REGISTERED, "solve(x0=...)")
+                guess[path] = value.value if isinstance(value, ParamValue) else value
+        return self._backend.solve(p_val=p_val, x0=guess or None, warm_start=warm_start)
 
     def evaluate(self, result) -> dict:
         """Every signal and quantity at the solution, by instance path.
