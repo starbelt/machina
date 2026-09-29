@@ -17,8 +17,9 @@ below; later phases append a writer rather than restructure this file): a
 three-component damped oscillator (one component produces a matrix with
 structural zeros, which is what makes :func:`machina.codegen.dense`
 necessary), a small params table through ``sync.apply``, the coverage NLP of
-``machina.astro`` compiled through ``Problem``, and a ``MANIFEST.json`` merged
-from the per-stage blocks. Nothing is differentiated before it is serialised:
+``machina.astro`` compiled through ``Problem``, the study layer (the coverage
+graph as one ``Evaluator`` function, a Pareto analysis of a fixed table, and a
+``SweepTable`` CSV), and a ``MANIFEST.json`` merged from the per-stage blocks. Nothing is differentiated before it is serialised:
 CasADi caches derivative Functions inside the objects that ``serialize()``
 writes, so the NLP is taken from ``nlp_expressions()`` before ``build()`` ever
 constructs a solver.
@@ -38,6 +39,7 @@ from machina.compiler import Problem
 from machina.model import Aggregation, Builder, Component, Declaration, Scope, SignalRegistry
 from machina.params import ParamRegistry, param, sync, table
 from machina.sim import build_step_function
+from machina.study import Evaluator, Objective, SweepTable, nondominated, weighted_sweep
 
 __all__ = ["run", "ARTIFACTS"]
 
@@ -191,6 +193,58 @@ def write_coverage(out: Path) -> dict:
     }}
 
 
+# --- stage 4: the study layer -----------------------------------------------------------------
+
+# A fixed design table: two objectives, a duplicate pair, a dominated row, a non-convex
+# (unsupported) stretch, a NaN row and an infeasible row. No solver runs in this stage:
+# IPOPT's last bits are not a determinism contract, the orderings are.
+STUDY_ROWS = (
+    {"config": "a", "latency": 30.0, "value": 0.20, "ok": True},
+    {"config": "b", "latency": 60.0, "value": 0.30, "ok": True},
+    {"config": "c", "latency": 90.0, "value": 0.36, "ok": True},
+    {"config": "d", "latency": 120.0, "value": 0.70, "ok": True},
+    {"config": "e", "latency": 120.0, "value": 0.70, "ok": True},
+    {"config": "f", "latency": 240.0, "value": 0.85, "ok": True},
+    {"config": "g", "latency": 480.0, "value": 0.90, "ok": True},
+    {"config": "h", "latency": 500.0, "value": 0.60, "ok": True},
+    {"config": "i", "latency": float("nan"), "value": 0.50, "ok": True},
+    {"config": "j", "latency": 10.0, "value": 0.99, "ok": False},
+)
+
+
+def write_study(out: Path) -> dict:
+    """The coverage graph through ``Evaluator.from_problem`` (serialised, never
+    differentiated), the Pareto layer over ``STUDY_ROWS``, and ``STUDY_ROWS`` written
+    through ``SweepTable.from_rows``."""
+    folder = out / "study"
+    evaluator = Evaluator.from_problem(coverage_problem())
+    _write(folder / "evaluator.casadi", evaluator.function.serialize())
+
+    objectives = [Objective("latency", log=True), Objective("value", "max")]
+    front = nondominated(STUDY_ROWS, objectives, feasible="ok")
+    trade = weighted_sweep(STUDY_ROWS, objectives, feasible="ok")
+    frontier = {
+        "leaves": list(evaluator.leaves),
+        "outputs": list(evaluator.outputs),
+        "nondominated": [int(i) for i in range(len(STUDY_ROWS)) if front[i]],
+        "segments": [[repr(seg.w_lo), repr(seg.w_hi), list(seg.rows)] for seg in trade.segments],
+        "switch_points": [repr(w) for w in trade.switch_points],
+        "supported": list(trade.supported),
+        "weakly_supported": list(trade.weakly_supported),
+        "unsupported": list(trade.unsupported),
+        "ideal": [repr(float(x)) for x in trade.normalized.ideal],
+        "nadir": [repr(float(x)) for x in trade.normalized.nadir],
+    }
+    _write(folder / "frontier.json", json.dumps(frontier, indent=2, sort_keys=True) + "\n")
+
+    SweepTable.from_rows(("config",), [dict(row) for row in STUDY_ROWS]).to_csv(
+        folder / "sweep.csv")
+    return {"study": {
+        "files": {name: sha256_of(folder / name)
+                  for name in ("evaluator.casadi", "frontier.json", "sweep.csv")},
+    }}
+
+
 # --- the probe --------------------------------------------------------------------------------
 
 # (stage name, writer). A writer builds its artifacts under ``out`` and returns the block it
@@ -199,6 +253,7 @@ ARTIFACTS = (
     ("plant", write_plant),
     ("params", write_params),
     ("coverage", write_coverage),
+    ("study", write_study),
 )
 
 
