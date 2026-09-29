@@ -34,7 +34,10 @@ bounds, scale
     ``overrides[path][...]``, then the ``Quantity``, then the ``ParamValue``
     the params table supplied. A ``ParamValue``'s ``lo``/``hi`` become bounds
     only where the ``Quantity`` left that one at +-inf, so a component that
-    knows its own physical limits keeps them, bound by bound.
+    knows its own physical limits keeps them, bound by bound. A ``PARAMETER``
+    takes no bound override; the solver never sees its bounds, but every value
+    it is given -- ``compile()``, ``solve(values=...)``, ``set_value()`` -- is
+    checked against them (:attr:`Problem.parameter_bounds`).
 provenance, source
     ``overrides[path][...]``, then the ``ParamValue`` -- a number that came
     from the params table is sourced by that table, not by whatever the
@@ -109,6 +112,7 @@ class Problem:
         self._quantity_of = {}
         self._roles = {}
         self._fixed = {}
+        self._parameter_bounds = {}
         self._discrete_mode = "native"
         self._compiled = False
         self._eval_fn = None
@@ -160,6 +164,22 @@ class Problem:
         self._require_compiled("fixed")
         return {path: value.copy() for path, value in self._fixed.items()}
 
+    @property
+    def parameter_bounds(self) -> dict:
+        """``{instance path: (lb, ub)}`` for every ``PARAMETER``, in declaration order.
+
+        The bounds ``compile()`` resolved: the ``Quantity``'s own, with a params
+        table's ``min``/``max`` where the ``Quantity`` left one open (a
+        parameter takes no ``lb``/``ub`` override). ``compile()``,
+        ``solve(values=...)`` and ``set_value()`` refuse a value outside them,
+        and so does every point of a ``sweep`` over the parameter. Arrays are
+        column-major flat for a column, ``(rows, cols)`` for a matrix; copies.
+        """
+        self._require_compiled("parameter_bounds")
+        return {path: tuple(_natural_array(bound, self._builder.shape_of(path))
+                            for bound in bounds)
+                for path, bounds in self._parameter_bounds.items()}
+
     # --- compile --------------------------------------------------------------------------
 
     def compile(self, *, roles=None, values=None, overrides=None,
@@ -204,7 +224,7 @@ class Problem:
         self._check_keys(roles, values, overrides, constraint_of)
 
         backend = SolverBackend(self._solver, self._solver_opts, verbose=self._verbose)
-        resolved, fixed, leaves, unsourced = {}, {}, {}, []
+        resolved, fixed, leaves, unsourced, parameter_bounds = {}, {}, {}, [], {}
         for path, quantity, owner in builder.quantities():
             over = overrides.get(path, {})
             role = _role_for(path, quantity, over, roles)
@@ -212,6 +232,14 @@ class Problem:
             value, param_value, bare_default = _value_for(path, quantity, over, values)
             if bare_default:
                 unsourced.append(path)
+            if role is Role.PARAMETER:
+                bounds = tuple(
+                    numeric(_bound(path, key, over, declared, quantity.shape, param_value, limit),
+                            quantity.shape, f"{path!r} {key} bound")
+                    for key, declared, limit in (("lb", quantity.lb, "lo"),
+                                                 ("ub", quantity.ub, "hi")))
+                _check_within(path, value, quantity.shape, bounds, owner, "compile()")
+                parameter_bounds[path] = bounds
             resolved[path] = role
             leaves[path] = _register(backend, fixed, path, quantity, owner, role, over,
                                      value, param_value)
@@ -234,6 +262,7 @@ class Problem:
         self._wired = wired
         self._roles = resolved
         self._fixed = fixed
+        self._parameter_bounds = parameter_bounds
         self._discrete_mode = discrete_mode
         self._compiled = True
         return self
@@ -359,8 +388,9 @@ class Problem:
         """Solve, optionally overriding parameter values and initial guesses for this call only.
 
         ``values`` is ``{parameter path: value}``; it reaches the backend as
-        ``solve(p_val=...)``, so a sweep costs no rebuild. ``warm_start`` is a
-        previous :class:`~machina.solver.SolutionResult`. ``x0`` is
+        ``solve(p_val=...)``, so a sweep costs no rebuild. A value outside the
+        parameter's compiled bounds (:attr:`parameter_bounds`) is refused.
+        ``warm_start`` is a previous :class:`~machina.solver.SolutionResult`. ``x0`` is
         ``{variable path: value}``, the starting point of those variables for
         this call: laid over the stored initial guesses and over the primal
         values a ``warm_start`` supplies, and never stored (use ``fix()`` or
@@ -372,7 +402,9 @@ class Problem:
             p_val = {}
             for path, value in values.items():
                 self._check_role(path, Role.PARAMETER, "solve(values=...)")
-                p_val[path] = value.value if isinstance(value, ParamValue) else value
+                value = value.value if isinstance(value, ParamValue) else value
+                self._check_parameter_value(path, value, "solve(values=...)")
+                p_val[path] = value
         guess = None
         if x0 is not None:
             if not isinstance(x0, Mapping):
@@ -431,10 +463,16 @@ class Problem:
     # --- editable data --------------------------------------------------------------------
 
     def set_value(self, path: str, value) -> None:
-        """Store a new value for a ``PARAMETER`` quantity; every later solve uses it."""
+        """Store a new value for a ``PARAMETER`` quantity; every later solve uses it.
+
+        A value outside the parameter's compiled bounds (:attr:`parameter_bounds`)
+        is refused and nothing is stored.
+        """
         self._require_compiled("set_value")
         self._check_role(path, Role.PARAMETER, "set_value")
-        self._backend.set_parameter(path, value.value if isinstance(value, ParamValue) else value)
+        value = value.value if isinstance(value, ParamValue) else value
+        self._check_parameter_value(path, value, "set_value")
+        self._backend.set_parameter(path, value)
 
     def set_bounds(self, path: str, lb=None, ub=None) -> None:
         """Change a variable's bounds. No rebuild is needed, before or after ``build()``."""
@@ -455,6 +493,10 @@ class Problem:
         self._backend.unfix(path)
 
     # --- internals ------------------------------------------------------------------------
+
+    def _check_parameter_value(self, path: str, value, what: str) -> None:
+        _check_within(path, value, self._builder.shape_of(path), self._parameter_bounds[path],
+                      self._quantity_of[path][1], what)
 
     def _check_role(self, path: str, wanted, what: str) -> None:
         wanted = wanted if isinstance(wanted, tuple) else (wanted,)
@@ -640,6 +682,43 @@ def _bound(path, key, over, declared, shape, param_value, attribute):
     flat = numeric(declared, shape, what)
     open_bound = np.isneginf(flat) if attribute == "lo" else np.isposinf(flat)
     return getattr(param_value, attribute) if open_bound.all() else declared
+
+
+def _check_within(path, value, shape, bounds, owner, what) -> None:
+    """Refuse a parameter value outside its compiled bounds, naming the path, value and bounds.
+
+    A value that is not a number of the declared shape, or holds a NaN, is left
+    to the backend, which refuses it with its own message; only the bounds are
+    checked here.
+    """
+    try:
+        raw = value.full() if isinstance(value, ca.DM) else value
+        flat = numeric(np.asarray(raw, dtype=float), shape, f"parameter {path!r}")
+    except (TypeError, ValueError, ModelError):
+        return
+    lo, hi = bounds
+    outside = np.flatnonzero((flat < lo) | (flat > hi))
+    if outside.size == 0:
+        return
+    if shape == (1, 1):
+        detail = f"{float(flat[0])!r} is outside its bounds [{float(lo[0])!r}, {float(hi[0])!r}]"
+    else:
+        detail = (f"{value!r} is outside its bounds at column-major element(s) "
+                  f"{outside.tolist()}: values {flat[outside].tolist()}, lb "
+                  f"{lo[outside].tolist()}, ub {hi[outside].tolist()}")
+    leaf = path.rpartition("/")[2]
+    raise ValueError(
+        f"{what}: parameter {path!r} = {detail}. A parameter's bounds are its physical "
+        f"limits, and a solve outside them answers a question the model excludes. Pass a value "
+        f"inside them, or widen the bound where it is declared: Quantity({leaf!r}, lb=..., "
+        f"ub=...) in {owner}'s declaration (or the params table's min/max where the Quantity "
+        f"leaves it open)."
+    )
+
+
+def _natural_array(flat, shape) -> np.ndarray:
+    """A flat column-major array as 1-D for a column, ``(rows, cols)`` for a matrix."""
+    return flat.reshape(shape, order="F") if shape[1] > 1 else flat.copy()
 
 
 def _semantic_type(shape) -> str:

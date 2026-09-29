@@ -1,9 +1,9 @@
 """
 Power factories: ``util.scene_compute_power`` turns the energy of one processed
 scene into an orbit-average load, ``util.solar_array_power`` is the
-orbit-average power a solar array delivers to the loads across one orbit with
-an eclipse, and ``util.battery_energy`` is the stored energy that carries a
-load through that eclipse.
+average power a solar array delivers to the loads across one eclipse cycle
+(an orbit in LEO, a solar day at GEO), and ``util.battery_energy`` is the
+stored energy that carries a load through that eclipse.
 
 Everything is SI: joules, seconds, watts, square metres; efficiencies and
 factors are dimensionless. None of the three takes a factory parameter, so the
@@ -58,40 +58,51 @@ def make_scene_compute_power() -> FunctionDescriptor:
 @register('util.solar_array_power')
 def make_solar_array_power() -> FunctionDescriptor:
     """
-    Orbit-average power a solar array delivers to the loads (SMAD sizing).
+    Cycle-average power a solar array delivers to the loads (SMAD sizing).
 
-        P_bar = S * eta * L_d * A * T_d / (T_e / X_e + T_d / X_d),
-        T_d   = T_orbit - T_e.
+        P_bar = S * eta * I_d * L_d * A * T_d / (T_e / X_e + T_d / X_d),
+        T_d   = T_cycle - T_e.
 
-    Derivation: the array generates only in daylight, S eta L_d A watts for
-    T_d seconds. The loads draw P_bar for the whole orbit: in daylight straight
-    from the array through a path of efficiency X_d, in eclipse from the
-    battery, which the array recharged in daylight, through a path of
-    efficiency X_e. Energy balance over one orbit,
+    Derivation: the array generates only in daylight, S eta I_d L_d A watts
+    for T_d seconds. The loads draw P_bar for the whole cycle: in daylight
+    straight from the array through a path of efficiency X_d, in eclipse from
+    the battery, which the array recharged in daylight, through a path of
+    efficiency X_e. Energy balance over one cycle,
 
-        S eta L_d A T_d = P_bar (T_e / X_e + T_d / X_d),
+        S eta I_d L_d A T_d = P_bar (T_e / X_e + T_d / X_d),
 
     solved for P_bar. This is SMAD's array-sizing relation with the eclipse and
-    daylight loads equal; it takes the array normal to the Sun (no cos theta
-    incidence loss) and folds inherent degradation into eta or L_d.
+    daylight loads equal. eta is the bare-cell efficiency; I_d is SMAD's
+    inherent degradation, the array-level losses a cell figure leaves out
+    (design and assembly, temperature, shadowing; nominal 0.77); L_d is the
+    lifetime degradation to end of life. S is the flux the array actually
+    sees: the solar flux times the cosine of the incidence angle, so the
+    caller folds any pointing loss into it (``PowerBudget`` passes
+    ``solar_flux * cos_incidence``).
+
+    T_cycle is the period over which one eclipse and one daylight pass recur:
+    the orbit period in LEO, one solar day (86400 s) at GEO, where the Sun
+    sets on the spacecraft once per day.
 
     Function interface
     ------------------
     Inputs
-        area        : (1, 1)  -- array area A [m^2].
-        flux        : (1, 1)  -- solar flux S [W/m^2], 1361 at 1 AU.
-        efficiency  : (1, 1)  -- cell (array) conversion efficiency eta [1].
-        degradation : (1, 1)  -- lifetime degradation factor L_d [1], end of life.
-        T_eclipse   : (1, 1)  -- eclipse duration T_e [s], 0 <= T_e <= T_orbit.
-        T_orbit     : (1, 1)  -- orbit period [s].
-        X_e         : (1, 1)  -- array-to-load path efficiency in eclipse [1].
-        X_d         : (1, 1)  -- array-to-load path efficiency in daylight [1].
+        area                 : (1, 1)  -- array area A [m^2].
+        flux                 : (1, 1)  -- flux on the array S [W/m^2]: 1361 at 1 AU times
+                                          the cosine of the incidence angle.
+        efficiency           : (1, 1)  -- bare-cell conversion efficiency eta [1].
+        inherent_degradation : (1, 1)  -- SMAD inherent degradation I_d [1], nominal 0.77.
+        degradation          : (1, 1)  -- lifetime degradation factor L_d [1], end of life.
+        T_eclipse            : (1, 1)  -- eclipse duration T_e [s], 0 <= T_e <= T_cycle.
+        T_cycle              : (1, 1)  -- eclipse recurrence period [s].
+        X_e                  : (1, 1)  -- array-to-load path efficiency in eclipse [1].
+        X_d                  : (1, 1)  -- array-to-load path efficiency in daylight [1].
     Output
-        power : (1, 1)  -- orbit-average power available to loads [W].
+        power : (1, 1)  -- cycle-average power available to loads [W].
 
     Numerics
     --------
-    T_d is floored at 0: an eclipse as long as the orbit leaves no daylight and
+    T_d is floored at 0: an eclipse as long as the cycle leaves no daylight and
     no generation, rather than a negative one. Each of the three divisions is a
     ``safe_divide``, correct here because T_e, T_d, X_e and X_d are non-negative
     for physical inputs; P_bar is linear in A, so an area-sizing solve is an LP.
@@ -99,22 +110,26 @@ def make_solar_array_power() -> FunctionDescriptor:
     area = ca.SX.sym('area')
     flux = ca.SX.sym('flux')
     efficiency = ca.SX.sym('efficiency')
+    inherent_degradation = ca.SX.sym('inherent_degradation')
     degradation = ca.SX.sym('degradation')
     T_eclipse = ca.SX.sym('T_eclipse')
-    T_orbit = ca.SX.sym('T_orbit')
+    T_cycle = ca.SX.sym('T_cycle')
     X_e = ca.SX.sym('X_e')
     X_d = ca.SX.sym('X_d')
 
-    T_day = ca.fmax(T_orbit - T_eclipse, 0.0)
+    T_day = ca.fmax(T_cycle - T_eclipse, 0.0)
     path_time = safe_divide(T_eclipse, X_e) + safe_divide(T_day, X_d)
-    power = safe_divide(flux * efficiency * degradation * area * T_day, path_time)
+    power = safe_divide(
+        flux * efficiency * inherent_degradation * degradation * area * T_day, path_time)
     f = ca.Function(
         'solar_array_power',
-        [area, flux, efficiency, degradation, T_eclipse, T_orbit, X_e, X_d], [power],
-        ['area', 'flux', 'efficiency', 'degradation', 'T_eclipse', 'T_orbit', 'X_e', 'X_d'],
+        [area, flux, efficiency, inherent_degradation, degradation, T_eclipse, T_cycle, X_e,
+         X_d], [power],
+        ['area', 'flux', 'efficiency', 'inherent_degradation', 'degradation', 'T_eclipse',
+         'T_cycle', 'X_e', 'X_d'],
         ['power'],
     )
-    return FunctionDescriptor(f, description='Orbit-average solar array power (SMAD)')
+    return FunctionDescriptor(f, description='Cycle-average solar array power (SMAD)')
 
 
 @register('util.battery_energy')

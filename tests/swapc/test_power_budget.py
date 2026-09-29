@@ -11,9 +11,13 @@ TestFactories      -- each factory against its formula, and its guards
 TestComputeLoad    -- declaration and the produced load
 TestPowerBudget    -- declaration, and the loads= argument
 TestAreaSizing     -- minimise array_area: closed-form area, active margin, battery,
-                      sensitivity to a load
+                      sensitivity to a load, the SMAD losses and the incidence cosine
 TestLoadsAdd       -- loads in two scopes, and two producers of one path
-TestEclipseSweep   -- machina.study.sweep over eclipse_duration
+TestLoadsAreNotLost -- one load under two spellings, a bare name blind to child scopes
+TestEclipseSweep   -- machina.study.sweep over eclipse_duration, inside its bounds only
+
+The closed forms here are written out from SMAD's sizing relation with the
+constants below; nothing calls the factory to get an expected value.
 """
 
 import casadi as ca
@@ -42,30 +46,30 @@ from machina.units import is_si
 pytestmark = pytest.mark.requires_casadi
 
 # PowerBudget's defaults.
-S, ETA, L_D = 1361.0, 0.30, 0.85
+S, COS, ETA, I_D, L_D = 1361.0, 1.0, 0.30, 0.77, 0.85
 X_E, X_D = 0.65, 0.85
-T_E, T_ORBIT = 4320.0, 86164.0
+T_E, T_CYCLE = 4320.0, 86400.0
 DOD, ETA_B = 0.8, 0.9
 FRONT, BUS, COMM = 5.0, 20.0, 10.0
 # ComputeLoad's defaults.
 E_SCENE, T_REFRESH = 10.0, 300.0
 
 POWER_BUDGET_QUANTITIES = (
-    "array_area", "front_power", "bus_power", "comm_power", "solar_flux", "cell_efficiency",
-    "degradation", "X_e", "X_d", "eclipse_duration", "orbit_period", "depth_of_discharge",
-    "battery_efficiency")
+    "array_area", "front_power", "bus_power", "comm_power", "solar_flux", "cos_incidence",
+    "cell_efficiency", "inherent_degradation", "degradation", "X_e", "X_d", "eclipse_duration",
+    "cycle_period", "depth_of_discharge", "battery_efficiency")
 
 
-def area_per_watt(T_e: float = T_E) -> float:
-    """dA*/dP: array area per watt of orbit-average load, (T_e/X_e + T_d/X_d) / (T_d S eta L_d)."""
-    T_d = T_ORBIT - T_e
-    return (T_e / X_E + T_d / X_D) / (T_d * S * ETA * L_D)
+def area_per_watt(T_e: float = T_E, cos: float = COS) -> float:
+    """dA*/dP per watt of cycle-average load: (T_e/X_e + T_d/X_d) / (T_d S cos eta I_d L_d)."""
+    T_d = T_CYCLE - T_e
+    return (T_e / X_E + T_d / X_D) / (T_d * S * cos * ETA * I_D * L_D)
 
 
 def array_power(area, T_e=T_E):
-    """SMAD orbit-average array power, the reference for util.solar_array_power."""
-    T_d = T_ORBIT - T_e
-    return S * ETA * L_D * area * T_d / (T_e / X_E + T_d / X_D)
+    """SMAD cycle-average array power, the reference for util.solar_array_power."""
+    T_d = T_CYCLE - T_e
+    return S * ETA * I_D * L_D * area * T_d / (T_e / X_E + T_d / X_D)
 
 
 def total_load(*scene_energies) -> float:
@@ -108,9 +112,10 @@ class TestSignals:
         assert list(registry_.all()) == list(swapc_signals.SIGNALS)
 
     def test_the_swapc_signals_follow_every_earlier_pack_in_the_default_layout(self):
+        """conftest imports rigid, astro, swapc in that order: swapc's block closes the layout."""
         names = list(model_signals.DEFAULT.all())
-        assert names[-len(swapc_signals.SIGNALS):] == list(swapc_signals.SIGNALS) or \
-            names.index("power_load") > names.index("coverage_total")
+        assert names[-len(swapc_signals.SIGNALS):] == list(swapc_signals.SIGNALS)
+        assert names.index("power_load") > names.index("coverage_total")
 
     def test_every_signal_and_quantity_unit_is_si(self):
         units = [model_signals.DEFAULT.get(name).unit for name in swapc_signals.SIGNALS]
@@ -140,22 +145,32 @@ class TestFactories:
     @pytest.mark.parametrize("area, T_e", [(1.0, 4320.0), (0.37, 0.0), (2.0, 2000.0)])
     def test_solar_array_power_matches_smad(self, area, T_e):
         power = registry.get("util.solar_array_power")()
-        got = evaluate(power, area, S, ETA, L_D, T_e, T_ORBIT, X_E, X_D)
+        got = evaluate(power, area, S, ETA, I_D, L_D, T_e, T_CYCLE, X_E, X_D)
         np.testing.assert_allclose(got, array_power(area, T_e), rtol=1e-14)
 
-    def test_solar_array_power_closes_the_orbit_energy_balance(self):
-        """S eta L_d A T_d = P_bar (T_e / X_e + T_d / X_d): the derivation, checked."""
+    def test_solar_array_power_closes_the_cycle_energy_balance(self):
+        """S eta I_d L_d A T_d = P_bar (T_e / X_e + T_d / X_d): the derivation, checked."""
         power = registry.get("util.solar_array_power")()
         area = 0.8
-        P_bar = evaluate(power, area, S, ETA, L_D, T_E, T_ORBIT, X_E, X_D)
-        T_d = T_ORBIT - T_E
-        np.testing.assert_allclose(P_bar * (T_E / X_E + T_d / X_D), S * ETA * L_D * area * T_d,
-                                   rtol=1e-14)
+        P_bar = evaluate(power, area, S, ETA, I_D, L_D, T_E, T_CYCLE, X_E, X_D)
+        T_d = T_CYCLE - T_E
+        np.testing.assert_allclose(P_bar * (T_E / X_E + T_d / X_D),
+                                   S * ETA * I_D * L_D * area * T_d, rtol=1e-14)
+
+    def test_inherent_degradation_is_an_input_that_multiplies_the_power(self):
+        """SMAD's I_d is its own input: the bare-cell efficiency no longer stands in for it."""
+        power = registry.get("util.solar_array_power")()
+        assert power.function.name_in() == [
+            "area", "flux", "efficiency", "inherent_degradation", "degradation", "T_eclipse",
+            "T_cycle", "X_e", "X_d"]
+        with_losses = evaluate(power, 1.0, S, ETA, 0.77, L_D, T_E, T_CYCLE, X_E, X_D)
+        without = evaluate(power, 1.0, S, ETA, 1.0, L_D, T_E, T_CYCLE, X_E, X_D)
+        np.testing.assert_allclose(with_losses / without, 0.77, rtol=1e-14)
 
     def test_no_daylight_generates_nothing(self):
         power = registry.get("util.solar_array_power")()
-        for T_e in (T_ORBIT, T_ORBIT + 100.0):
-            assert evaluate(power, 1.0, S, ETA, L_D, T_e, T_ORBIT, X_E, X_D) == 0.0
+        for T_e in (T_CYCLE, T_CYCLE + 100.0):
+            assert evaluate(power, 1.0, S, ETA, I_D, L_D, T_e, T_CYCLE, X_E, X_D) == 0.0
 
     @pytest.mark.parametrize("P, T_e, dod, eta", [(35.0, 4320.0, 0.8, 0.9), (1.0, 60.0, 1.0, 1.0)])
     def test_battery_energy_is_eclipse_energy_over_dod_and_efficiency(self, P, T_e, dod, eta):
@@ -190,7 +205,7 @@ class TestPowerBudget:
         assert q["array_area"].unit == "m^2"
         assert q["solar_flux"].unit == "W/m^2"
         assert all(q[n].unit == "W" for n in ("front_power", "bus_power", "comm_power"))
-        assert all(q[n].unit == "s" for n in ("eclipse_duration", "orbit_period"))
+        assert all(q[n].unit == "s" for n in ("eclipse_duration", "cycle_period"))
         assert (q["array_area"].role, q["array_area"].default_role) == \
             (Role.FLEXIBLE, Role.VARIABLE)
         flexible_parameters = ("front_power", "bus_power", "comm_power", "eclipse_duration")
@@ -205,6 +220,21 @@ class TestPowerBudget:
     def test_every_default_is_sourced(self):
         """compile(strict=True) refuses an unsourced default."""
         Problem([ComputeLoad(), PowerBudget()], verbose=False).compile(strict=True)
+
+    def test_the_array_losses_and_the_eclipse_cycle_are_their_own_quantities(self):
+        """The bare-cell efficiency is not the array efficiency; GEO's eclipse recurs daily."""
+        q = quantities(PowerBudget())
+        assert (q["inherent_degradation"].default, q["inherent_degradation"].provenance,
+                q["inherent_degradation"].source) == \
+            (0.77, "D", "SMAD nominal inherent degradation")
+        assert (q["cos_incidence"].default, q["cos_incidence"].unit,
+                q["cos_incidence"].provenance) == (1.0, "1", "A")
+        assert "0.917" in q["cos_incidence"].doc
+        assert (q["cycle_period"].default, q["cycle_period"].unit) == (86400.0, "s")
+        assert "solar day" in q["cycle_period"].source
+        assert "cell" in q["cell_efficiency"].doc and "cell" in q["cell_efficiency"].source
+        assert all(q[n].role is Role.FIXED
+                   for n in ("inherent_degradation", "cos_incidence", "cycle_period"))
 
     def test_reads_power_load_and_produces_battery_energy(self):
         dec = PowerBudget().declare()
@@ -264,6 +294,40 @@ class TestAreaSizing:
         np.testing.assert_allclose(result.constraint("power_margin").multiplier.item(),
                                    -area_per_watt(), rtol=1e-6)
 
+    def test_the_default_area_carries_smad_inherent_degradation_over_a_solar_day(self):
+        """The review's 30 % undersizing: A* by hand, every SMAD factor written out.
+
+        A* = P_tot (T_e/X_e + T_d/X_d) / (T_d S cos eta I_d L_d) with P_tot = 35 W + 10 J / 300 s,
+        T_d = 86400 - 4320 s, I_d = 0.77. Without I_d and over the sidereal day the area was
+        0.12696 m^2.
+        """
+        problem, result = sized([ComputeLoad(), PowerBudget()])
+        P_tot = 5.0 + 20.0 + 10.0 + 10.0 / 300.0
+        T_d = 86400.0 - 4320.0
+        by_hand = P_tot * (4320.0 / 0.65 + T_d / 0.85) / (T_d * 1361.0 * 1.0 * 0.30 * 0.77 * 0.85)
+        area = problem.evaluate(result)["array_area"].item()
+        np.testing.assert_allclose(area, by_hand, rtol=1e-8)
+        np.testing.assert_allclose(area, 0.164846784, rtol=1e-8)
+
+    def test_the_incidence_cosine_multiplies_the_flux(self):
+        """A one-axis tracked GEO array at solstice: cos 23.44 deg, the area grows by 1/cos."""
+        cos = float(np.cos(np.radians(23.44)))
+        problem, result = sized([ComputeLoad(), PowerBudget()], values={"cos_incidence": cos})
+        np.testing.assert_allclose(problem.evaluate(result)["array_area"].item(),
+                                   total_load(E_SCENE) * area_per_watt(cos=cos), rtol=1e-8)
+        np.testing.assert_allclose(cos, 0.917, atol=5e-4)
+
+    def test_the_solstice_case_needs_about_two_percent_more_than_the_equinox_eclipse(self):
+        """The docstring's claim: one-axis tracking, no eclipse, cos 23.44 deg, vs the equinox."""
+        cos = float(np.cos(np.radians(23.44)))
+        problem, result = sized([ComputeLoad(), PowerBudget()],
+                                values={"cos_incidence": cos, "eclipse_duration": 0.0})
+        solstice = problem.evaluate(result)["array_area"].item()
+        np.testing.assert_allclose(solstice, total_load(E_SCENE) * area_per_watt(0.0, cos),
+                                   rtol=1e-8)
+        ratio = solstice / (total_load(E_SCENE) * area_per_watt())
+        assert 1.01 < ratio < 1.03, ratio
+
 
 class ExtraLoad(Component):
     """A second producer of power_load with no quantities, so it can share a scope."""
@@ -299,16 +363,87 @@ class TestLoadsAdd:
         np.testing.assert_allclose(values["array_area"].item(),
                                    (total_load(E_SCENE) + 7.0) * area_per_watt(), rtol=1e-8)
 
-    def test_a_child_scope_load_is_not_read_by_the_bare_name(self):
-        """Lexical lookup goes outward only; the unproduced root SUM reads zero."""
-        builder = Builder([Scope("a", [ComputeLoad()]), PowerBudget()]).declare()
-        assert builder.resolved("power_budget")["load_0"] == "power_load"
-        assert builder.unproduced_sums == ["power_load"]
+    def test_nested_loads_are_listed_path_by_path_and_sum(self):
+        """Every load path is listed: a/gpu is a child of a, not part of a/power_load."""
+        components = [Scope("a", [ComputeLoad(), Scope("gpu", [ComputeLoad()])]),
+                      PowerBudget(loads=("a/power_load", "a/gpu/power_load"))]
+        problem, result = sized(components, values={"a/E_scene": 30.0, "a/gpu/E_scene": 60.0})
+        np.testing.assert_allclose(problem.evaluate(result)["array_area"].item(),
+                                   total_load(30.0, 60.0) * area_per_watt(), rtol=1e-8)
 
     def test_the_budget_in_the_loads_scope_reads_it_by_the_bare_name(self):
         builder = Builder([Scope("sc", [ComputeLoad(), PowerBudget()])]).declare()
         assert builder.resolved("sc/power_budget")["load_0"] == "sc/power_load"
         assert builder.unproduced_sums == []
+
+    def test_a_bare_name_reads_an_enclosing_scopes_load(self):
+        builder = Builder([ComputeLoad(), Scope("sc", [PowerBudget()])]).declare()
+        assert builder.resolved("sc/power_budget")["load_0"] == "power_load"
+        assert builder.unproduced_sums == []
+
+    def test_a_budget_with_no_load_anywhere_reads_zero(self):
+        """No power_load in the model: the SUM is zero, and the budget pays for its own loads."""
+        problem, result = sized([PowerBudget()])
+        assert problem.builder.unproduced_sums == ["power_load"]
+        np.testing.assert_allclose(problem.evaluate(result)["array_area"].item(),
+                                   total_load() * area_per_watt(), rtol=1e-8)
+
+
+E_10W = 3000.0     # J per 300 s scene: a 10 W compute load, large enough to see in the area
+
+
+class TestLoadsAreNotLost:
+    """The review's loads.py cases: a load counted twice, or silently dropped."""
+
+    @pytest.mark.parametrize("components", [
+        # A: relative and absolute spelling of one path, budget at the root.
+        [Scope("a", [ComputeLoad()]), PowerBudget(loads=("a/power_load", "/a/power_load"))],
+        # B: bare and absolute spelling at the root.
+        [ComputeLoad(), PowerBudget(loads=("power_load", "/power_load"))],
+        # G: budget in a scope, a relative reference climbing out, and its absolute twin.
+        [Scope("a", [ComputeLoad()]),
+         Scope("sc", [PowerBudget(loads=("a/power_load", "/a/power_load"))])],
+        # H: a bare name that resolves to the root load, and the root load absolutely.
+        [ComputeLoad(), Scope("sc", [PowerBudget(loads=("power_load", "/power_load"))])],
+    ], ids=["relative+absolute", "bare+absolute", "scoped-budget", "bare-climbs-out"])
+    def test_one_load_under_two_spellings_is_refused(self, components):
+        """It summed the one producer twice: P_tot 55 W for a 45 W spacecraft."""
+        with pytest.raises(ModelError, match=r"reads '(a/)?power_load' twice: algebraic entries "
+                                             r"'load_0' -> .* and 'load_1' -> .*loads="):
+            Builder(components).declare()
+
+    def test_the_alias_refusal_names_the_component_and_the_path(self):
+        components = [Scope("a", [ComputeLoad()]),
+                      PowerBudget(loads=("a/power_load", "/a/power_load"))]
+        with pytest.raises(ModelError) as info:
+            Problem(components, verbose=False).compile(values={"a/E_scene": E_10W})
+        message = str(info.value)
+        assert message.startswith("power_budget reads 'a/power_load' twice")
+        assert "'a/power_load'" in message and "'/a/power_load'" in message
+
+    def test_a_bare_name_blind_to_a_child_scope_load_is_refused(self):
+        """Case C: the default loads with the compute in a child scope read zero, a 10 W drop."""
+        with pytest.raises(ModelError, match=r"power_budget: loads entry 'power_load' is a bare "
+                                             r"name.*\['a/power_load'\].*"
+                                             r"PowerBudget\(loads=\('a/power_load',\)\)"):
+            Problem([Scope("a", [ComputeLoad()]), PowerBudget()],
+                    verbose=False).compile(values={"a/E_scene": E_10W})
+
+    def test_the_refusal_lists_every_child_load_relative_to_the_budget(self):
+        components = [Scope("sc", [PowerBudget(), Scope("cpu", [ComputeLoad()]),
+                                   Scope("gpu", [ComputeLoad()])])]
+        with pytest.raises(ModelError, match=r"sc/power_budget: .*scope 'sc'.*"
+                                             r"\['sc/cpu/power_load', 'sc/gpu/power_load'\].*"
+                                             r"loads=\('cpu/power_load', 'gpu/power_load'\)"):
+            Builder(components).declare()
+
+    def test_a_listed_child_load_is_paid_for(self):
+        """The fix the refusal names: the same model with the path listed closes on 45 W."""
+        problem, result = sized([Scope("a", [ComputeLoad()]), PowerBudget(loads=("a/power_load",))],
+                                values={"a/E_scene": E_10W})
+        np.testing.assert_allclose(problem.evaluate(result)["array_area"].item(),
+                                   total_load(E_10W) * area_per_watt(), rtol=1e-8)
+        np.testing.assert_allclose(total_load(E_10W), 45.0, rtol=1e-15)
 
 
 class TestEclipseSweep:
@@ -331,3 +466,17 @@ class TestEclipseSweep:
             table["battery_energy"],
             [total_load(E_SCENE) * T_e / (DOD * ETA_B) for T_e in self.ECLIPSES],
             rtol=1e-12, atol=1e-9)
+
+    def test_a_negative_eclipse_is_an_error_row_not_a_success(self):
+        """The review's roles.py: eclipse_duration = -100 s solved and reported success."""
+        problem = Problem([ComputeLoad(), PowerBudget()], verbose=False).compile()
+        problem.add_cost(problem.expr("array_area").symbol, name="area")
+        problem.build()
+        table = sweep(problem, {"eclipse_duration": [-100.0, 4320.0]}, collect=("array_area",))
+        assert table["success"] == [False, True]
+        assert table["status"][0] == "error"
+        assert table["error"][0].startswith(
+            "ValueError: solve(values=...): parameter 'eclipse_duration' = -100.0 is outside its "
+            "bounds [0.0, inf]")
+        with pytest.raises(ValueError, match="'eclipse_duration' = -100.0 is outside"):
+            sweep(problem, {"eclipse_duration": [-100.0]}, raise_on_error=True)

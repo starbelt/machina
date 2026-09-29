@@ -12,7 +12,10 @@ once, the way every pack does. :func:`declare_into` declares the same set into
 any other registry, which is how tests get a clean copy.
 
 **Layout ABI.** Registry declaration order is the vector layout. Append new
-signals at the end of :func:`declare_into`; never insert.
+signals at the end of :func:`declare_into`; never insert. Where this block
+lands in :data:`~machina.model.signals.DEFAULT` follows pack import order:
+``tests/conftest.py`` imports rigid, astro, then swapc, so swapc's signals
+come last there; a process that imports swapc first lays them out first.
 """
 
 from machina.model.signals import DEFAULT, Aggregation, SignalRegistry

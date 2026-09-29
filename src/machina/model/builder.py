@@ -33,7 +33,7 @@ produced signal under ``inputs`` -- is refused, naming the group it belongs
 in. Letting it through gave wrong numbers: a missing topological edge, a
 reader seeing a partial ``SUM``, an input replaced by zeros.
 
-Three things are added for machina:
+Four things are added for machina:
 
 ``Scope``
     Components nest under named prefixes, so two satellites are ordinary
@@ -53,6 +53,14 @@ Three things are added for machina:
     SX leaves, and both run the same checks over the same graph structure.
     ``h`` outputs come back as constraints and ``J`` outputs as cost terms,
     in declaration order; the compiler, not the component, registers them.
+
+``check_wiring``
+    Optional on a component: ``check_wiring(path, resolved, producers)``,
+    called at the end of ``declare()`` with plain copies of the instance
+    path, the component's ``{local name: instance path}`` and every produced
+    path's producers. It holds rules one component's semantics justify but
+    the builder cannot apply to every model; it raises ``ModelError`` to
+    refuse. A component that does not define it is not asked.
 """
 
 from dataclasses import dataclass
@@ -207,6 +215,7 @@ class Builder:
         self._lay_out()
         self._check_unproduced()
         self._order = self._topological_order()
+        self._check_wiring()
         self._declared = True
         return self
 
@@ -398,6 +407,7 @@ class Builder:
         consumed_as: dict = {}
         for item in self.placed:
             resolved = self._resolved[item.path]
+            self._refuse_aliases(item, resolved)
             for group in ("states", "algebraic", "inputs"):
                 for local, _ in getattr(item.declaration, group):
                     consumed_as.setdefault(resolved[local], []).append((group, item.path))
@@ -434,6 +444,30 @@ class Builder:
                             f"{label.capitalize()} names are unique per scope -- rename one."
                         )
                     seen[path] = item.path
+
+    @staticmethod
+    def _refuse_aliases(item: Placed, resolved: dict) -> None:
+        """Two algebraic locals of one component may not resolve to one instance path.
+
+        ``'a/p'`` and ``'/a/p'`` from the root, or ``'p'`` and ``'/p'`` there, are
+        two spellings of one path. The component would see the one value under
+        two names, and anything that adds its reads -- a budget over its loads --
+        counts it twice.
+        """
+        seen: dict = {}
+        for local, reference in item.declaration.algebraic:
+            path = resolved[local]
+            if path in seen:
+                first, first_reference = seen[path]
+                raise ModelError(
+                    f"{item.path} reads {path!r} twice: algebraic entries {first!r} -> "
+                    f"{first_reference!r} and {local!r} -> {reference!r} resolve to the same "
+                    f"instance path, so the one value would be seen under two names (and "
+                    f"counted twice by anything that adds them). Remove one of the two "
+                    f"references from {item.path}'s declaration -- or, for a component built "
+                    f"from a list of references such as PowerBudget(loads=...), from that list."
+                )
+            seen[path] = (local, reference)
 
     def _refuse_input_shadow(self, path: str, uses: list, consumed_as: dict) -> None:
         """An unproduced signal read beside an input of the same name is a silent zero.
@@ -513,6 +547,26 @@ class Builder:
                 f"UNIQUE so there is no zero to fall back on. Add a producer, or declare the "
                 f"signal SUM."
             )
+
+    def _check_wiring(self) -> None:
+        """Each component's own wiring rule, for the components that define one.
+
+        A rule that one component's semantics justify but that would refuse
+        legitimate models if the builder applied it to every signal lives on
+        that component as ``check_wiring(path, resolved, producers)``, e.g.
+        ``PowerBudget`` refusing a bare ``power_load`` that reads zero while a
+        child scope produces loads (a rigid body reading an unproduced
+        ``force`` beside a thrusting satellite is a reduced model, not an
+        error). It is called once per instance, in component order, after
+        every structural check, with plain copies: the instance path, its
+        ``{local name: instance path}`` and ``{instance path: (component
+        paths)}`` for every produced signal. It raises ``ModelError`` to refuse.
+        """
+        producers = self._producer_table()
+        for item in self.placed:
+            check = getattr(item.component, "check_wiring", None)
+            if check is not None:
+                check(item.path, dict(self._resolved[item.path]), dict(producers))
 
     def _topological_order(self) -> list:
         """Producers of an algebraic signal before its consumers. Kahn's, kept stable.
@@ -804,6 +858,9 @@ class Builder:
     def producers(self) -> dict:
         """Instance path to the component paths that integrate or compute it."""
         self._require_declared("producers")
+        return self._producer_table()
+
+    def _producer_table(self) -> dict:
         out = {}
         for item in self.placed:
             for name in item.declaration.produced():
