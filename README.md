@@ -113,7 +113,7 @@ sets `MPLBACKEND=Agg`).
 | `src/machina/library/` | the factory registry and the generic factories (`cost.*`, `constraint.linear`, `util.*`), numeric guards | yes (registers the generic factories) |
 | `src/machina/sim/`, `src/machina/codegen/` | RK4 step function; dense C export, manifest merge, layout blocks | no (light; import machina.sim / machina.codegen explicitly) |
 | `src/machina/astro/` | frames `eci/ecef/lvlh`, MEE/KOE transforms, universal-variable Kepler, elevation geometry, smooth coverage, `SingleSatCoverage` | no — importing it declares its signals and registers `transform.*`, `geometry.*`, `cost.smooth_coverage` |
-| `src/machina/swapc/` | goodput and latency factories for the thesis cost function (budget signals and components come with the first consumer) | no — importing it registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `util.ttp_computation` |
+| `src/machina/swapc/` | goodput and latency factories for the thesis cost function (budget signals and components come with the first consumer) | no — importing it registers `cost.sigmoid_goodput`, `cost.aggregate_goodput`, `cost.loglogistic_goodput`, `util.ttp_computation` |
 | `src/machina/rigid/`, `src/machina/aero/` | frames `ned/frd`, rigid-body signals and quaternion kinematics (skeleton); placeholder | no |
 | `src/machina/report/` | planned (Phase 4): LaTeX/Markdown tables and equations of a compiled problem, with provenance | no |
 | `src/machina/viz.py` | NLP-level graph view used by three examples (needs the `viz` extra); a component-level graph with Mermaid/DOT export is planned | no |

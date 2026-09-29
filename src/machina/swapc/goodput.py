@@ -1,15 +1,21 @@
 """
 Goodput factories: ``cost.sigmoid_goodput`` scores the timeliness of one
 delivered product, ``cost.aggregate_goodput`` the importance-weighted sum over
-products.
+products, and ``cost.loglogistic_goodput`` scores a latency against an event
+timescale on a log axis. ``loglogistic_shape`` turns two latencies (the 90 %
+and 10 % value points) into that factory's ``(tau, q)``.
 
 The registered names keep their ``cost.`` prefix: registered names are a
-stable ABI. Importing this module registers both factories;
+stable ABI. Importing this module registers the three factories;
 ``import machina.swapc`` imports it.
 """
 
+import math
+import numbers
+
 import casadi as ca
 
+from machina.library.numerics import TINY
 from machina.library.registry import register
 from machina.model.descriptor import FunctionDescriptor
 
@@ -199,3 +205,86 @@ def make_aggregate_goodput(
     return FunctionDescriptor(
         f, description=f'Aggregate goodput ({n_products} products)'
     )
+
+
+@register('cost.loglogistic_goodput')
+def make_loglogistic_goodput(*, q: float, tau: float) -> FunctionDescriptor:
+    """
+    Log-logistic goodput: G(L) = 1 / (1 + (L / tau)**q).
+
+    The value of an observation that arrives a latency L after the event it
+    reports, for an event that evolves on a timescale tau. It is the logistic
+    of ``cost.sigmoid_goodput`` applied to log(L / tau) instead of L, so the
+    decay is set by the ratio L / tau: halving the latency buys the same
+    value at every scale. G(0) = 1, G(tau) = 0.5, G -> 0 as L -> inf.
+
+    Factory parameters
+    ------------------
+    q : float
+        Steepness, > 0. G falls from 0.9 to 0.1 while L grows by a factor
+        of 81**(1/q): q = 2 spans 9x, q = 10 about 1.55x (close to a step at
+        tau). ``loglogistic_shape`` computes q from those two latencies.
+    tau : float
+        Event timescale, > 0, in the unit of the latency input (seconds for
+        the thesis): the latency at which half the value is gone.
+
+    Function interface
+    ------------------
+    Input
+        latency : (1, 1)  -- latency L >= 0, same unit as tau.
+    Output
+        goodput : (1, 1)  -- dimensionless value in (0, 1].
+
+    Numerics
+    --------
+    Evaluated as 0.5 - 0.5 * tanh(z / 2) with z = q * log(max(L / tau, TINY)),
+    which equals 1 / (1 + exp(z)) but never forms exp(z): at a huge latency
+    exp(z) overflows to inf and the gradient becomes inf / inf = NaN. The
+    floor at TINY keeps log finite at L = 0, where the gradient is then 0. For
+    q < 1 the true gradient is unbounded as L -> 0+; the floor caps it.
+
+    Sign convention
+    ---------------
+    A value to MAXIMIZE, like ``cost.sigmoid_goodput``: pass ``-G`` as a cost.
+
+    Usage example
+    -------------
+        tau, q = loglogistic_shape(latency_at_90=600.0, latency_at_10=5400.0)
+        G = registry.get('cost.loglogistic_goodput')(q=q, tau=tau)
+        value = G(latency=latency_expr)
+    """
+    q = _positive(q, 'q', 'cost.loglogistic_goodput')
+    tau = _positive(tau, 'tau', 'cost.loglogistic_goodput')
+    latency = ca.SX.sym('latency')
+    z = q * ca.log(ca.fmax(latency / tau, TINY))
+    goodput = 0.5 - 0.5 * ca.tanh(0.5 * z)
+    f = ca.Function('loglogistic_goodput', [latency], [goodput], ['latency'], ['goodput'])
+    return FunctionDescriptor(f, description=f'Log-logistic goodput (q={q}, tau={tau})')
+
+
+def loglogistic_shape(*, latency_at_90: float, latency_at_10: float) -> tuple:
+    """
+    ``(tau, q)`` of the log-logistic goodput with G = 0.9 at *latency_at_90*
+    and G = 0.1 at *latency_at_10*.
+
+    From (a / tau)**q = 1/9 and (b / tau)**q = 9: tau = sqrt(a * b) and
+    q = ln(81) / ln(b / a). Both latencies must be positive, in the same
+    unit, with latency_at_90 < latency_at_10.
+    """
+    a = _positive(latency_at_90, 'latency_at_90', 'loglogistic_shape')
+    b = _positive(latency_at_10, 'latency_at_10', 'loglogistic_shape')
+    if not a < b:
+        raise ValueError(
+            f"loglogistic_shape: latency_at_90 ({a}) must be smaller than "
+            f"latency_at_10 ({b}); value falls as latency grows.")
+    return math.sqrt(a * b), math.log(81.0) / math.log(b / a)
+
+
+def _positive(value, name: str, where: str) -> float:
+    """*value* as a finite positive float, or a ValueError naming *where*."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{where}: {name} must be a real number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{where}: {name} must be a finite number > 0, got {value!r}")
+    return number

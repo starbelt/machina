@@ -52,7 +52,8 @@ ASTRO_FACTORIES = (
     "transform.koe_to_mee", "transform.lagrange_coefficients", "transform.mee_to_eci",
     "transform.mee_to_koe", "transform.propagate_universal", "transform.stumpff_cs",
     "transform.universal_kepler")
-SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.sigmoid_goodput", "util.ttp_computation")
+SWAPC_FACTORIES = ("cost.aggregate_goodput", "cost.loglogistic_goodput", "cost.sigmoid_goodput",
+                   "util.ttp_computation")
 
 
 def run_python(code: str) -> subprocess.CompletedProcess:
@@ -161,7 +162,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
             f"generic factory modules; a domain factory belongs in its pack, which registers it "
             f"when the pack is imported")
 
-    def test_import_machina_astro_adds_its_ten_factories(self):
+    def test_import_machina_astro_adds_its_factories(self):
         generic, astro, _ = registered_after_each_import()
         assert added(generic, astro) == list(ASTRO_FACTORIES), (
             f"`import machina.astro` added {added(generic, astro)}; expected exactly "
@@ -169,7 +170,7 @@ class TestPacksRegisterTheirFactoriesOnImport:
             f"register them (transforms, geometry, coverage)")
         assert not added(astro, generic), f"`import machina.astro` removed {added(astro, generic)}"
 
-    def test_import_machina_swapc_adds_its_three_factories(self):
+    def test_import_machina_swapc_adds_its_factories(self):
         _, astro, swapc = registered_after_each_import()
         assert added(astro, swapc) == list(SWAPC_FACTORIES), (
             f"`import machina.swapc` added {added(astro, swapc)}; expected exactly "
